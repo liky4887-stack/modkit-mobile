@@ -5,6 +5,9 @@ import {
   AlertTriangle, Share2, Trash2, Rewind, ShieldCheck, Lightbulb,
   GraduationCap, Users, TrendingDown, Zap, Cloud, GitBranch,
   Shuffle, Gauge, Share, Swords,
+  Settings2, Lock, FileLock2, Package, RefreshCw, Globe,
+  Stethoscope, Gauge as GaugeIcon, Smartphone, Power, ShieldHalf,
+  Layers, KeyRound, FileCheck2, Download, Eye, ServerCog,
 } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
 
@@ -13,6 +16,9 @@ const iconMap: Record<string, LucideIcon> = {
   AlertTriangle, Share2, Trash2, Rewind, ShieldCheck, Lightbulb,
   GraduationCap, Users, TrendingDown, Zap, Cloud, GitBranch,
   Shuffle, Gauge, Share, Swords,
+  Settings2, Lock, FileLock2, Package, RefreshCw, Globe,
+  Stethoscope, Smartphone, Power, ShieldHalf,
+  Layers, KeyRound, FileCheck2, Download, Eye, ServerCog,
 };
 
 interface FeatureIconProps {
