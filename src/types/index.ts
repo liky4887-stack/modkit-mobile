@@ -13,7 +13,17 @@ export type FeatureCategory =
   | 'optimization'
   | 'distributed'
   | 'adversarial'
-  | 'education';
+  | 'education'
+  | 'policy'
+  | 'integrity'
+  | 'storage'
+  | 'build'
+  | 'update'
+  | 'privacy'
+  | 'observability'
+  | 'performance'
+  | 'platform'
+  | 'governance';
 
 export type FeatureStatus = 'active' | 'standby' | 'warning' | 'disabled';
 
@@ -42,7 +52,12 @@ export interface FeatureStatusUpdate {
 
 export type TargetType = 'APK' | 'IPA' | 'OBB';
 
-export type PatchStep = 'import' | 'analysis' | 'design' | 'preview' | 'export';
+export type PatchStep =
+  | 'import'
+  | 'analysis'
+  | 'design'
+  | 'preview'
+  | 'export';
 
 export interface PatchTarget {
   id: string;
@@ -374,4 +389,132 @@ export interface QuantumSnapshot {
   configHash: string;
   changes: string[];
   riskEstimate: number;
+}
+
+export interface PolicyRule {
+  id: string;
+  name: string;
+  layer: string;
+  enabled: boolean;
+  environment: 'dev' | 'staging' | 'prod';
+  config: Record<string, string | number | boolean>;
+}
+
+export interface StealthLayer {
+  id: string;
+  index: number;
+  name: string;
+  shortName: string;
+  category: FeatureCategory;
+  description: string;
+  icon: string;
+  status: FeatureStatus;
+  riskLevel: 'none' | 'low' | 'medium' | 'high' | 'critical';
+  isSimulated: boolean;
+  isAbstract: boolean;
+  isEducational: boolean;
+}
+
+export interface UpdateTrustEntry {
+  id: string;
+  version: string;
+  hash: string;
+  signer: string;
+  timestamp: number;
+  valid: boolean;
+}
+
+export interface UpdatePolicy {
+  id: string;
+  name: string;
+  minVersion: string;
+  maxVersion: string;
+  environment: 'dev' | 'staging' | 'prod';
+  cohortPercent: number;
+  wifiOnly: boolean;
+  lowRiskOnly: boolean;
+}
+
+export interface CanaryRollout {
+  id: string;
+  version: string;
+  cohort: 'qa' | 'canary' | 'public';
+  deviceCount: number;
+  crashRate: number;
+  status: 'pending' | 'active' | 'completed' | 'rolled-back';
+}
+
+export interface DifferentialCheck {
+  id: string;
+  module: string;
+  oldHash: string;
+  newHash: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  reviewRequired: boolean;
+}
+
+export interface RollbackSlot {
+  id: string;
+  version: string;
+  bundleHash: string;
+  configHash: string;
+  knownGood: boolean;
+  timestamp: number;
+}
+
+export interface SignatureUpdate {
+  id: string;
+  ruleSet: string;
+  version: string;
+  signed: boolean;
+  changes: string[];
+  timestamp: number;
+}
+
+export interface StealthRiskScore {
+  score: number;
+  band: 'normal' | 'watch' | 'restrict' | 'lockdown';
+  factors: StealthRiskFactor[];
+  timestamp: number;
+}
+
+export interface StealthRiskFactor {
+  layer: string;
+  weight: number;
+  value: number;
+  description: string;
+}
+
+export interface DegradationAction {
+  id: string;
+  feature: string;
+  type: 'soft-block' | 'hard-block' | 'friction' | 'informative';
+  message: string;
+  active: boolean;
+}
+
+export interface KillSwitch {
+  id: string;
+  name: string;
+  target: string;
+  active: boolean;
+  reason: string;
+  activatedAt: number;
+}
+
+export interface PerformanceMetric {
+  layer: string;
+  cpuUsage: number;
+  memoryUsage: number;
+  frameTimeMs: number;
+  networkOverheadKb: number;
+  withinBudget: boolean;
+}
+
+export interface ComplianceRule {
+  id: string;
+  region: string;
+  signalAllowed: boolean;
+  retentionDays: number;
+  consentRequired: boolean;
 }
