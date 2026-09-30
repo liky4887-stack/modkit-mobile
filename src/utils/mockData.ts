@@ -36,6 +36,18 @@ import type {
   PatchDiff,
   ExportSummary,
   BehaviorConfig,
+  PolicyRule,
+  UpdateTrustEntry,
+  UpdatePolicy,
+  CanaryRollout,
+  DifferentialCheck,
+  RollbackSlot,
+  SignatureUpdate,
+  StealthRiskScore,
+  DegradationAction,
+  KillSwitch,
+  PerformanceMetric,
+  ComplianceRule,
 } from '@/types';
 import { mockGen } from './mockGen';
 
@@ -421,6 +433,7 @@ export function genCleaningProfile(): CleaningProfile {
 
 export function genCleaningResult(): CleaningResult {
   const issues = genCleaningIssues();
+  const detected = issues.filter((i) => i.detected);
   return {
     profile: genCleaningProfile(),
     issues,
@@ -545,7 +558,7 @@ export function genExportSummary(target: PatchTarget, patches: PatchDefinition[]
     patchesApplied: applied,
     riskScore: randFloat(0.1, 0.5),
     estimatedDetectionRate: randFloat(0.02, 0.15),
-    buildSize: `${randFloat(5, 250, 1)}MB`,
+    buildSize: `${randFloat(target.size ? 5 : 5, 250, 1)}MB`,
     timestamp: Date.now(),
   };
 }
@@ -557,4 +570,177 @@ export function genBehaviorConfig(): BehaviorConfig {
     randomness: randFloat(0.1, 0.6),
     sessionLength: randInt(30, 240),
   };
+}
+
+export function genPolicyRules(count: number): PolicyRule[] {
+  const layers = ['policy-orchestration', 'session-integrity', 'network-transport-guard', 'risk-scoring-policy', 'ota-governance', 'privacy-compliance'];
+  const envs: PolicyRule['environment'][] = ['dev', 'staging', 'prod'];
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    name: pick(['Strict TLS Pinning', 'Low-Risk Update Gate', 'Telemetry Batch Window', 'Root Detection Watch', 'Canary Cohort 5%', 'Privacy EU Mode']),
+    layer: pick(layers),
+    enabled: Math.random() > 0.2,
+    environment: pick(envs),
+    config: {
+      threshold: randFloat(0.1, 0.9),
+      timeout_ms: randInt(1000, 30000),
+      enabled: Math.random() > 0.3,
+    },
+  }));
+}
+
+export function genUpdateTrustEntries(count: number): UpdateTrustEntry[] {
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    version: `${randInt(1, 9)}.${randInt(0, 9)}.${randInt(0, 9)}`,
+    hash: hexLower(64),
+    signer: pick(['release-key-alpha', 'release-key-beta', 'release-key-gamma', 'release-key-delta']),
+    timestamp: Date.now() - randInt(0, 86400000 * 30),
+    valid: Math.random() > 0.1,
+  }));
+}
+
+export function genUpdatePolicies(count: number): UpdatePolicy[] {
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    name: pick(['WiFi-Only Stable', 'Staging Cohort', 'Low-Risk Canary', 'Global Rollout', 'Emergency Patch']),
+    minVersion: `${randInt(1, 8)}.${randInt(0, 9)}.0`,
+    maxVersion: `${randInt(9, 15)}.${randInt(0, 9)}.0`,
+    environment: pick(['dev', 'staging', 'prod'] as const),
+    cohortPercent: randInt(1, 100),
+    wifiOnly: Math.random() > 0.4,
+    lowRiskOnly: Math.random() > 0.5,
+  }));
+}
+
+export function genCanaryRollouts(count: number): CanaryRollout[] {
+  const statuses: CanaryRollout['status'][] = ['pending', 'active', 'completed', 'rolled-back'];
+  const cohorts: CanaryRollout['cohort'][] = ['qa', 'canary', 'public'];
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    version: `${randInt(1, 9)}.${randInt(0, 9)}.${randInt(0, 9)}`,
+    cohort: pick(cohorts),
+    deviceCount: randInt(10, 50000),
+    crashRate: randFloat(0, 5, 2),
+    status: pick(statuses),
+  }));
+}
+
+export function genDifferentialChecks(count: number): DifferentialCheck[] {
+  const modules = ['anti-cheat-glue', 'network-guard', 'js-bundle-core', 'integrity-checker', 'telemetry-schema', 'session-validator'];
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    module: pick(modules),
+    oldHash: hexLower(40),
+    newHash: hexLower(40),
+    riskLevel: pick(['low', 'medium', 'high'] as const),
+    reviewRequired: Math.random() > 0.6,
+  }));
+}
+
+export function genRollbackSlots(count: number): RollbackSlot[] {
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    version: `${randInt(1, 9)}.${randInt(0, 9)}.${randInt(0, 9)}`,
+    bundleHash: hexLower(64),
+    configHash: hexLower(40),
+    knownGood: Math.random() > 0.3,
+    timestamp: Date.now() - randInt(0, 86400000 * 7),
+  }));
+}
+
+export function genSignatureUpdates(count: number): SignatureUpdate[] {
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    ruleSet: pick(['anti-tamper', 'environment-heuristics', 'risk-weights', 'hook-signatures', 'emulator-patterns']),
+    version: `${randInt(1, 9)}.${randInt(0, 9)}.${randInt(0, 9)}`,
+    signed: Math.random() > 0.05,
+    changes: Array.from({ length: randInt(1, 5) }, () => pick(['added-signature', 'updated-weight', 'removed-false-positive', 'new-heuristic', 'threshold-adjusted'])),
+    timestamp: Date.now() - randInt(0, 86400000 * 14),
+  }));
+}
+
+export function genStealthRiskScore(): StealthRiskScore {
+  const score = randInt(0, 100);
+  const band: StealthRiskScore['band'] = score <= 20 ? 'normal' : score <= 50 ? 'watch' : score <= 80 ? 'restrict' : 'lockdown';
+  return {
+    score,
+    band,
+    factors: Array.from({ length: randInt(3, 6) }, () => ({
+      layer: pick(['runtime-sensing', 'anti-tamper-hook', 'network-transport-guard', 'session-integrity', 'match-integrity', 'performance-monitor']),
+      weight: randFloat(0.1, 0.4),
+      value: randFloat(0, 1),
+      description: pick([
+        'Environment anomalies detected',
+        'Hook signatures matched',
+        'Network replay token mismatch',
+        'Session context changed mid-session',
+        'Gameplay action sequence implausible',
+        'Protection module exceeding budget',
+      ]),
+    })),
+    timestamp: Date.now(),
+  };
+}
+
+export function genDegradationActions(count: number): DegradationAction[] {
+  const types: DegradationAction['type'][] = ['soft-block', 'hard-block', 'friction', 'informative'];
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    feature: pick(['Ranked Mode', 'Competitive Queue', 'Inventory Trading', 'Matchmaking', 'Leaderboard Submission', 'In-App Purchases']),
+    type: pick(types),
+    message: pick([
+      'Additional verification required for this action.',
+      'This feature is temporarily restricted due to security policy.',
+      'Please re-authenticate to continue.',
+      'Matchmaking may take longer than usual.',
+      'This action has been blocked for account safety.',
+    ]),
+    active: Math.random() > 0.4,
+  }));
+}
+
+export function genKillSwitches(count: number): KillSwitch[] {
+  return Array.from({ length: count }, () => ({
+    id: id(),
+    name: pick(['Disable Risk Rule v3', 'Rollback Signature Set', 'Force Strict TLS', 'Emergency Lockdown', 'Disable OTA Channel']),
+    target: pick(['risk-scoring-policy', 'signature-ruleset-updates', 'network-transport-guard', 'governance-killswitch', 'ota-governance']),
+    active: Math.random() > 0.7,
+    reason: pick([
+      'False positive rate exceeded threshold',
+      'Signature set causing crashes on Android 14',
+      'Security incident: forced posture change',
+      'OTA channel compromised, disabling updates',
+      'Rule set incompatible with new game version',
+    ]),
+    activatedAt: Date.now() - randInt(0, 86400000),
+  }));
+}
+
+export function genPerformanceMetrics(count: number): PerformanceMetric[] {
+  const layers = ['obfuscation-hardening', 'asset-protection', 'js-bundle-shield', 'runtime-sensing', 'anti-tamper-hook', 'network-transport-guard', 'telemetry-evidence'];
+  return Array.from({ length: count }, () => {
+    const cpu = randFloat(0.5, 15, 1);
+    const mem = randFloat(1, 50, 1);
+    const frame = randFloat(0.1, 8, 1);
+    const net = randFloat(0, 20, 1);
+    return {
+      layer: pick(layers),
+      cpuUsage: cpu,
+      memoryUsage: mem,
+      frameTimeMs: frame,
+      networkOverheadKb: net,
+      withinBudget: cpu < 10 && mem < 30 && frame < 5,
+    };
+  });
+}
+
+export function genComplianceRules(): ComplianceRule[] {
+  return [
+    { id: id(), region: 'EU/GDPR', signalAllowed: true, retentionDays: 30, consentRequired: true },
+    { id: id(), region: 'ES/CCPA', signalAllowed: true, retentionDays: 45, consentRequired: false },
+    { id: id(), region: 'BR/LGPD', signalAllowed: true, retentionDays: 60, consentRequired: true },
+    { id: id(), region: 'Global', signalAllowed: true, retentionDays: 90, consentRequired: false },
+    { id: id(), region: 'Restricted', signalAllowed: false, retentionDays: 0, consentRequired: true },
+  ];
 }
