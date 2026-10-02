@@ -1,0 +1,42 @@
+# Sovereign Factory
+
+Execution-first mobile console for signal routing, patch analysis, and module orchestration. All subsystems operate on local mock data.
+
+## Stack
+
+- Expo Router (file-based routing)
+- React Native + TypeScript
+- Zustand store (`@/store/useAppStore`)
+- lucide-react-native icons
+- JetBrains Mono + Inter fonts
+
+## Layout
+
+- `app/(tabs)/index.tsx` — Console: system overview, live logs, signature rotation
+- `app/(tabs)/patch.tsx` — Patch wizard: import → analyze → design → preview → export
+- `app/(tabs)/features.tsx` — Module registry and search
+- `app/(tabs)/settings.tsx` — Config toggles, data management
+- `app/(tabs)/clean.tsx` — Cleaning workflow (select → scan → results)
+- `app/feature/[id].tsx` — Per-feature configuration
+- `components/` — TopBar, Panel, StatCard, RiskMeter, LogLine, StatusBadge, WarningBanner, CodeBlock, Toggle, Chip, FeatureCard, FeatureIcon, SectionHeader
+- `features/registry.ts` — Feature manifest (id, category, risk, icon)
+- `utils/mockData.ts` — Deterministic generators for signatures, logs, targets, analyses, patches, cleaning results
+- `store/useAppStore.ts` — Feature states, logs, actions
+- `theme/` — colors and spacing tokens
+- `types/` — shared TypeScript types
+
+## Commands
+
+```bash
+npm start        # Expo dev server
+npm run ios      # iOS simulator
+npm run android  # Android emulator
+npm run web      # Web bundle
+npm run typecheck
+```
+
+## Note
+
+This is a simulation and educational tool. No real binaries are processed, no kernel code is executed, and no anti-cheat bypass is performed. Every output is generated from mock data in `utils/mockData.ts`.
+
+This project does not ship, bundle, link, or reference any malicious software. Requests to embed "real powerful viruses" or functional game cheats are out of scope and are refused. The module registry is a static manifest of conceptual labels used for UI demonstration only.
