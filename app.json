@@ -1,15 +1,19 @@
 {
   "expo": {
-    "name": "modkit",
-    "slug": "modkit",
+    "name": "pubg-hack",
+    "slug": "pubg-hack",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "automatic",
+    "scheme": "pubghack",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pubghack.tool"
+    },
+    "android": {
+      "package": "com.pubghack.tool"
     },
     "web": {
       "bundler": "metro",
