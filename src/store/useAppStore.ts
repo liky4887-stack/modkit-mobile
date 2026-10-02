@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { FeatureStatus, LogEntry } from '@/types';
 import { features } from '@/features/registry';
-import { genLog } from '@/utils/mockData';
 
 interface FeatureState {
   [featureId: string]: {
@@ -21,12 +20,10 @@ interface AppState {
   toggleFeature: (featureId: string) => void;
   setFeatureStatus: (featureId: string, status: FeatureStatus) => void;
   addLog: (log: LogEntry) => void;
-  addRandomLog: () => void;
   clearLogs: () => void;
   setSidebarOpen: (open: boolean) => void;
   setInspectorOpen: (open: boolean) => void;
   setActiveTab: (tab: string) => void;
-  initLogs: () => void;
 }
 
 function initialFeatureStates(): FeatureState {
@@ -36,17 +33,13 @@ function initialFeatureStates(): FeatureState {
       status: f.status,
       enabled: f.status === 'active',
       lastActivated: Date.now(),
-      metrics: {
-        uptime: Math.floor(Math.random() * 86400),
-        events: Math.floor(Math.random() * 1000),
-        riskScore: Math.random() * 0.5,
-      },
+      metrics: { uptime: 0, events: 0, riskScore: 0 },
     };
   }
   return state;
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
+export const useAppStore = create<AppState>((set) => ({
   featureStates: initialFeatureStates(),
   logs: [],
   sidebarOpen: false,
@@ -86,13 +79,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addLog: (log: LogEntry) => {
-    set((state) => ({
-      logs: [log, ...state.logs].slice(0, 200),
-    }));
-  },
-
-  addRandomLog: () => {
-    get().addLog(genLog());
+    set((state) => ({ logs: [log, ...state.logs].slice(0, 200) }));
   },
 
   clearLogs: () => set({ logs: [] }),
@@ -100,12 +87,4 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
   setInspectorOpen: (open: boolean) => set({ inspectorOpen: open }),
   setActiveTab: (tab: string) => set({ activeTab: tab }),
-
-  initLogs: () => {
-    const existing = get().logs;
-    if (existing.length === 0) {
-      const initialLogs = Array.from({ length: 15 }, () => genLog());
-      set({ logs: initialLogs });
-    }
-  },
 }));

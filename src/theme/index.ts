@@ -15,3 +15,10 @@ export const radius = {
   lg: 14,
   xl: 20,
 } as const;
+
+export const layout = {
+  topBarHeight: 56,
+  tabBarHeight: 60,
+  screenPadding: 16,
+  maxContentWidth: 640,
+} as const;

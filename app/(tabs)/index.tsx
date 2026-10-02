@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
@@ -8,32 +8,24 @@ import { features } from '@/features/registry';
 import { FeatureIcon } from '@/components/FeatureIcon';
 import { useRouter } from 'expo-router';
 import { Plus, Activity, ShieldCheck, AlertTriangle, ChevronRight } from 'lucide-react-native';
-import { genSignatures } from '@/utils/mockData';
-import type { SignatureEntry, LogEntry } from '@/types';
 
 export default function ConsoleScreen() {
   const router = useRouter();
-  const { logs, featureStates, initLogs, addRandomLog, clearLogs } = useAppStore();
-
-  const [signatures, setSignatures] = React.useState<SignatureEntry[]>([]);
-  const [allLogs, setAllLogs] = React.useState<LogEntry[]>([]);
-
-  useEffect(() => {
-    initLogs();
-    setSignatures(genSignatures(5));
-  }, []);
-
-  useEffect(() => {
-    setAllLogs(logs);
-  }, [logs]);
+  const { logs, featureStates, addLog, clearLogs } = useAppStore();
 
   const activeCount = Object.values(featureStates).filter((s) => s.enabled).length;
   const warningCount = Object.values(featureStates).filter((s) => s.status === 'warning').length;
   const avgRisk = Object.values(featureStates).reduce((acc, s) => acc + (s.metrics.riskScore ?? 0), 0) / features.length;
 
   const handleAddLog = useCallback(() => {
-    addRandomLog();
-  }, [addRandomLog]);
+    addLog({
+      id: `${Date.now()}`,
+      timestamp: Date.now(),
+      level: 'info',
+      source: 'console',
+      message: 'Manual log entry',
+    });
+  }, [addLog]);
 
   const quickFeatures = features.slice(0, 6);
 
@@ -56,7 +48,7 @@ export default function ConsoleScreen() {
         <View style={styles.statsGrid}>
           <StatCard label="Events" value={Object.values(featureStates).reduce((acc, s) => acc + (s.metrics.events ?? 0), 0)} color={colors.cyan} />
           <StatCard label="Uptime" value={`${Math.floor(Object.values(featureStates).reduce((acc, s) => acc + (s.metrics.uptime ?? 0), 0) / features.length / 3600)}h`} color={colors.info} />
-          <StatCard label="Logs" value={allLogs.length} color={colors.textSecondary} />
+          <StatCard label="Logs" value={logs.length} color={colors.textSecondary} />
         </View>
 
         <View style={styles.sectionSpacing} />
@@ -104,34 +96,18 @@ export default function ConsoleScreen() {
         </View>
 
         <View style={styles.sectionSpacing} />
-        <SectionHeader title="Live Log Stream" subtitle={`${allLogs.length} entries`} actionLabel="CLEAR" onAction={clearLogs} />
+        <SectionHeader title="Live Log Stream" subtitle={`${logs.length} entries`} actionLabel="CLEAR" onAction={clearLogs} />
         <View style={styles.panelWrap}>
           <Panel noPadding>
             <ScrollView style={styles.logScroll} nestedScrollEnabled>
-              {allLogs.length === 0 ? (
+              {logs.length === 0 ? (
                 <View style={styles.logEmpty}>
-                  <Text style={styles.logEmptyText}>No logs yet. Tap + to generate.</Text>
+                  <Text style={styles.logEmptyText}>No logs yet. Tap + to add an entry.</Text>
                 </View>
               ) : (
-                allLogs.slice(0, 50).map((log) => <LogLine key={log.id} entry={log} />)
+                logs.slice(0, 50).map((log) => <LogLine key={log.id} entry={log} />)
               )}
             </ScrollView>
-          </Panel>
-        </View>
-
-        <View style={styles.sectionSpacing} />
-        <SectionHeader title="Signature Rotation" subtitle="last 5 rotations" />
-        <View style={styles.panelWrap}>
-          <Panel noPadding>
-            {signatures.map((sig, i) => (
-              <View key={sig.id} style={[styles.sigRow, i < signatures.length - 1 && styles.sigRowBorder]}>
-                <Text style={styles.sigHash}>{sig.hash.slice(0, 24)}...</Text>
-                <View style={styles.sigRight}>
-                  <Text style={styles.sigEntropy}>E:{sig.entropy.toFixed(2)}</Text>
-                  <Text style={styles.sigDet}>D:{(sig.detectionProbability * 100).toFixed(1)}%</Text>
-                </View>
-              </View>
-            ))}
           </Panel>
         </View>
 
@@ -141,7 +117,7 @@ export default function ConsoleScreen() {
             <Activity size={18} color={colors.accent} strokeWidth={2} />
             <View>
               <Text style={styles.workflowLinkTitle}>Binary Patch Workflow</Text>
-              <Text style={styles.workflowLinkSub}>5-step guided patching wizard</Text>
+              <Text style={styles.workflowLinkSub}>Upload APK and OBB files</Text>
             </View>
           </View>
           <ChevronRight size={18} color={colors.textTertiary} strokeWidth={2} />
@@ -152,7 +128,7 @@ export default function ConsoleScreen() {
             <ShieldCheck size={18} color={colors.cyan} strokeWidth={2} />
             <View>
               <Text style={styles.workflowLinkTitle}>Cleaning Workflow</Text>
-              <Text style={styles.workflowLinkSub}>Analyze and clean modified apps</Text>
+              <Text style={styles.workflowLinkSub}>Upload a modified app to inspect</Text>
             </View>
           </View>
           <ChevronRight size={18} color={colors.textTertiary} strokeWidth={2} />
@@ -182,12 +158,6 @@ const styles = StyleSheet.create({
   logScroll: { maxHeight: 220 },
   logEmpty: { padding: spacing.lg, alignItems: 'center' as const },
   logEmptyText: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: colors.textTertiary },
-  sigRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, paddingVertical: spacing.sm + 2, paddingHorizontal: spacing.md },
-  sigRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
-  sigHash: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: colors.accent },
-  sigRight: { flexDirection: 'row' as const, gap: spacing.sm },
-  sigEntropy: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.cyan },
-  sigDet: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.warning },
   workflowLink: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: spacing.md },
   workflowLinkLeft: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.sm + 2 },
   workflowLinkTitle: { fontFamily: 'Inter-Bold', fontSize: 14, color: colors.textPrimary },

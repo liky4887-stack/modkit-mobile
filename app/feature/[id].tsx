@@ -1,47 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, Toggle, RiskMeter, StatusBadge, WarningBanner, StatCard, CodeBlock, Slider, LogLine } from '@/components';
+import { TopBar, Panel, Toggle, StatCard, CodeBlock, Slider, LogLine } from '@/components';
 import { FeatureIcon } from '@/components/FeatureIcon';
 import { getFeatureById } from '@/features/registry';
 import { useAppStore } from '@/store/useAppStore';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Info } from 'lucide-react-native';
-import { genLogs, genSignatures, genMemoryRegions, genAdversarialRounds, genGenerations, genBanWaveForecast, genLatencyPoints, genMeshNodes } from '@/utils/mockData';
-import type { LogEntry, SignatureEntry, MemoryRegion, AdversarialRound, GenerationEntry, BanWaveForecast, LatencyPoint, MeshNode } from '@/types';
 
 export default function FeatureDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const feature = id ? getFeatureById(id) : undefined;
-  const { featureStates, toggleFeature, addLog } = useAppStore();
+  const { featureStates, toggleFeature, addLog, logs } = useAppStore();
 
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [signatures, setSignatures] = useState<SignatureEntry[]>([]);
-  const [memoryRegions, setMemoryRegions] = useState<MemoryRegion[]>([]);
-  const [rounds, setRounds] = useState<AdversarialRound[]>([]);
-  const [generations, setGenerations] = useState<GenerationEntry[]>([]);
-  const [forecasts, setForecasts] = useState<BanWaveForecast[]>([]);
-  const [latency, setLatency] = useState<LatencyPoint[]>([]);
-  const [meshNodes, setMeshNodes] = useState<MeshNode[]>([]);
-  const [aggression, setAggression] = useState(0.5);
-  const [reactionTime, setReactionTime] = useState(300);
-  const [randomness, setRandomness] = useState(0.3);
-  const [sessionLength, setSessionLength] = useState(120);
-
-  useEffect(() => {
-    setLogs(genLogs(8));
-    if (feature) {
-      if (feature.id === 'signature-engine') setSignatures(genSignatures(8));
-      if (feature.id === 'memory-cloaking' || feature.id === 'memory-injector') setMemoryRegions(genMemoryRegions(10));
-      if (feature.id === 'adversarial-net') setRounds(genAdversarialRounds(10));
-      if (feature.id === 'genetic-patches') setGenerations(genGenerations(8));
-      if (feature.id === 'ban-wave-predictor') setForecasts(genBanWaveForecast(12));
-      if (feature.id === 'latency-optimizer') setLatency(genLatencyPoints(20));
-      if (feature.id === 'mesh-compute') setMeshNodes(genMeshNodes(6));
-    }
-  }, [feature]);
+  const [aggression, setAggression] = React.useState(0.5);
+  const [reactionTime, setReactionTime] = React.useState(300);
+  const [randomness, setRandomness] = React.useState(0.3);
+  const [sessionLength, setSessionLength] = React.useState(120);
 
   if (!feature) {
     return (
@@ -56,6 +32,7 @@ export default function FeatureDetailScreen() {
 
   const state = featureStates[feature.id];
   const isAbstract = feature.isAbstract || feature.isEducational;
+  const featureLogs = logs.filter((l) => l.source === feature.id);
 
   return (
     <View style={styles.container}>
@@ -86,25 +63,12 @@ export default function FeatureDetailScreen() {
           </View>
         </View>
 
-        {isAbstract && (
-          <View style={styles.sectionSpacing}>
-            <WarningBanner
-              message={feature.id === 'kernel-bridge'
-                ? "This is a conceptual interface only. No real kernel or rootkit code is involved. For educational understanding of what such a bridge would conceptually do."
-                : feature.id === 'social-eng'
-                ? "EDUCATIONAL ONLY. This module describes how social engineering operates for defensive awareness training. Not a tool for malicious use."
-                : "This module is educational and abstract. No real exploitation is performed."}
-              type={feature.id === 'kernel-bridge' ? 'danger' : 'educational'}
-            />
-          </View>
-        )}
-
         <View style={styles.sectionSpacing} />
         <Panel title="Module Control">
           <View style={styles.controlRow}>
             <View style={styles.controlInfo}>
               <Text style={styles.controlLabel}>Enable Module</Text>
-              <Text style={styles.controlDesc}>Toggle to activate this module's simulation</Text>
+              <Text style={styles.controlDesc}>Toggle to activate this module</Text>
             </View>
             <Toggle
               value={state?.enabled ?? false}
@@ -141,139 +105,6 @@ export default function FeatureDetailScreen() {
           </View>
         )}
 
-        {signatures.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Signature History">
-              {signatures.map((sig, i) => (
-                <View key={sig.id} style={[styles.dataRow, i < signatures.length - 1 && styles.dataRowBorder]}>
-                  <Text style={styles.dataHash}>{sig.hash.slice(0, 32)}...</Text>
-                  <View style={styles.dataRight}>
-                    <Text style={styles.dataEntropy}>E:{sig.entropy.toFixed(2)}</Text>
-                    <Text style={styles.dataDet}>D:{(sig.detectionProbability * 100).toFixed(1)}%</Text>
-                  </View>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {memoryRegions.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Memory Map">
-              {memoryRegions.map((region, i) => (
-                <View key={region.id} style={[styles.dataRow, i < memoryRegions.length - 1 && styles.dataRowBorder]}>
-                  <View style={styles.memLeft}>
-                    <View style={[styles.memDot, { backgroundColor: region.cloaked ? colors.purple : region.type === 'code' ? colors.accent : region.type === 'data' ? colors.cyan : colors.textTertiary }]} />
-                    <Text style={styles.memAddr}>{region.address}</Text>
-                  </View>
-                  <View style={styles.memRight}>
-                    <Text style={styles.memType}>{region.type}</Text>
-                    <Text style={styles.memSize}>{region.size}</Text>
-                    {region.cloaked && <Text style={styles.memCloaked}>CLOAKED</Text>}
-                  </View>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {rounds.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Adversarial Rounds">
-              {rounds.map((r) => (
-                <View key={r.round} style={styles.roundRow}>
-                  <Text style={styles.roundNum}>R{r.round}</Text>
-                  <View style={styles.roundBar}>
-                    <View style={styles.roundBarRow}>
-                      <Text style={styles.roundLabel}>ATK</Text>
-                      <View style={styles.roundBarTrack}>
-                        <View style={[styles.roundBarFill, { width: `${r.attackerScore}%`, backgroundColor: colors.danger }]} />
-                      </View>
-                      <Text style={styles.roundScore}>{r.attackerScore}</Text>
-                    </View>
-                    <View style={styles.roundBarRow}>
-                      <Text style={styles.roundLabel}>DEF</Text>
-                      <View style={styles.roundBarTrack}>
-                        <View style={[styles.roundBarFill, { width: `${r.defenderScore}%`, backgroundColor: colors.accent }]} />
-                      </View>
-                      <Text style={styles.roundScore}>{r.defenderScore}</Text>
-                    </View>
-                  </View>
-                  <Text style={[styles.roundOutcome, { color: r.outcome === 'attacker' ? colors.danger : r.outcome === 'defender' ? colors.accent : colors.textTertiary }]}>
-                    {r.outcome === 'attacker' ? 'ATK' : r.outcome === 'defender' ? 'DEF' : 'DRAW'}
-                  </Text>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {generations.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Generational Evolution">
-              {generations.map((g) => (
-                <View key={g.generation} style={styles.genRow}>
-                  <Text style={styles.genNum}>G{g.generation}</Text>
-                  <View style={styles.genInfo}>
-                    <RiskMeter value={g.fitness} size="sm" showValue={false} />
-                    <Text style={styles.genFit}>{(g.fitness * 100).toFixed(0)}%</Text>
-                  </View>
-                  <Text style={styles.genPatch}>{g.bestPatch}</Text>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {forecasts.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Ban Wave Forecast (12h)">
-              {forecasts.slice(0, 6).map((f, i) => (
-                <View key={i} style={styles.forecastRow}>
-                  <Text style={styles.forecastTime}>+{i + 1}h</Text>
-                  <View style={styles.forecastBar}>
-                    <View style={styles.forecastTrack}>
-                      <View style={[styles.forecastFill, { width: `${f.probability * 100}%`, backgroundColor: f.probability > 0.4 ? colors.danger : colors.warning }]} />
-                    </View>
-                  </View>
-                  <Text style={[styles.forecastPct, { color: f.probability > 0.4 ? colors.danger : colors.warning }]}>
-                    {(f.probability * 100).toFixed(0)}%
-                  </Text>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {latency.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Latency Optimization">
-              {latency.slice(0, 8).map((l, i) => (
-                <View key={i} style={styles.latencyRow}>
-                  <Text style={styles.latencyIdx}>{String(i + 1).padStart(2, '0')}</Text>
-                  <Text style={styles.latencyVal}>{l.latency.toFixed(0)}ms</Text>
-                  <Text style={styles.latencyJitter}>±{l.jitter.toFixed(0)}ms</Text>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        {meshNodes.length > 0 && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Mesh Nodes">
-              {meshNodes.map((n) => (
-                <View key={n.id} style={styles.nodeRow}>
-                  <View style={[styles.nodeDot, { backgroundColor: n.status === 'online' ? colors.accent : n.status === 'degraded' ? colors.warning : colors.danger }]} />
-                  <Text style={styles.nodeName}>{n.name}</Text>
-                  <Text style={styles.nodeRegion}>{n.region}</Text>
-                  <Text style={styles.nodeLoad}>{(n.load * 100).toFixed(0)}%</Text>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
         {feature.id === 'kernel-bridge' && (
           <View style={styles.sectionSpacing}>
             <Panel title="Conceptual Architecture">
@@ -284,14 +115,12 @@ export default function FeatureDetailScreen() {
                   '// No real kernel code is executed',
                   '',
                   'interface KernelBridge {',
-                  '  // Would conceptually provide:',
                   '  hook_syscall(id: u64): Result',
                   '  hide_process(pid: u32): void',
                   '  cloak_memory(addr: ptr): void',
-                  '  // All methods are SIMULATED',
                   '}',
                 ]}
-                highlightLines={[1, 2]}
+                highlightLines={[0, 1]}
               />
             </Panel>
           </View>
@@ -329,7 +158,7 @@ export default function FeatureDetailScreen() {
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Index</Text>
-            <Text style={styles.infoValue}>{String(feature.index).padStart(2, '0')} / 23</Text>
+            <Text style={styles.infoValue}>{String(feature.index).padStart(2, '0')}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Category</Text>
@@ -345,7 +174,7 @@ export default function FeatureDetailScreen() {
             <Text style={styles.infoLabel}>Simulated</Text>
             <Text style={styles.infoValue}>{feature.isSimulated ? 'Yes' : 'No'}</Text>
           </View>
-          <View style={styles.infoRow}>
+          <View style={[styles.infoRow, styles.infoRowLast]}>
             <Text style={styles.infoLabel}>Educational</Text>
             <Text style={styles.infoValue}>{feature.isEducational ? 'Yes' : 'No'}</Text>
           </View>
@@ -353,7 +182,13 @@ export default function FeatureDetailScreen() {
 
         <View style={styles.sectionSpacing} />
         <Panel title="Activity Log" noPadding>
-          {logs.map((log) => <LogLine key={log.id} entry={log} />)}
+          {featureLogs.length === 0 ? (
+            <View style={styles.emptyLog}>
+              <Text style={styles.emptyText}>No activity for this module yet.</Text>
+            </View>
+          ) : (
+            featureLogs.slice(0, 30).map((log) => <LogLine key={log.id} entry={log} />)
+          )}
         </Panel>
 
         <View style={{ height: spacing.xxl }} />
@@ -367,7 +202,8 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.md, paddingBottom: spacing.xl },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  emptyText: { fontFamily: 'Inter-Regular', fontSize: 14, color: colors.textTertiary },
+  emptyText: { fontFamily: 'Inter-Regular', fontSize: 13, color: colors.textTertiary, textAlign: 'center', padding: spacing.md },
+  emptyLog: { padding: spacing.lg, alignItems: 'center' },
   header: { flexDirection: 'row', gap: spacing.md, paddingVertical: spacing.sm },
   headerIcon: { width: 56, height: 56, borderRadius: radius.lg, backgroundColor: colors.surfaceElevated, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   headerInfo: { flex: 1 },
@@ -382,49 +218,8 @@ const styles = StyleSheet.create({
   controlLabel: { fontFamily: 'Inter-Bold', fontSize: 14, color: colors.textPrimary },
   controlDesc: { fontFamily: 'Inter-Regular', fontSize: 12, color: colors.textTertiary, marginTop: 2 },
   metricsRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
-  dataRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
-  dataRowBorder: { borderBottomWidth: 1 },
-  dataHash: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: colors.accent, flex: 1 },
-  dataRight: { flexDirection: 'row', gap: spacing.sm },
-  dataEntropy: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.cyan },
-  dataDet: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.warning },
-  memLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  memDot: { width: 8, height: 8, borderRadius: 4 },
-  memAddr: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: colors.textPrimary },
-  memRight: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  memType: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.cyan, textTransform: 'uppercase' },
-  memSize: { fontFamily: 'JetBrainsMono-Regular', fontSize: 10, color: colors.textTertiary },
-  memCloaked: { fontFamily: 'JetBrainsMono-Bold', fontSize: 8, color: colors.purple, letterSpacing: 0.5 },
-  roundRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
-  roundNum: { fontFamily: 'JetBrainsMono-Bold', fontSize: 11, color: colors.textTertiary, minWidth: 28 },
-  roundBar: { flex: 1, gap: 4 },
-  roundBarRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  roundLabel: { fontFamily: 'JetBrainsMono-Bold', fontSize: 9, color: colors.textTertiary, minWidth: 28 },
-  roundBarTrack: { flex: 1, height: 4, backgroundColor: colors.surfaceElevated, borderRadius: 2, overflow: 'hidden' },
-  roundBarFill: { height: 4, borderRadius: 2 },
-  roundScore: { fontFamily: 'JetBrainsMono-Bold', fontSize: 11, color: colors.textPrimary, minWidth: 28, textAlign: 'right' },
-  roundOutcome: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, minWidth: 36, textAlign: 'right' },
-  genRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border },
-  genNum: { fontFamily: 'JetBrainsMono-Bold', fontSize: 11, color: colors.textTertiary, minWidth: 32 },
-  genInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, width: 100 },
-  genFit: { fontFamily: 'JetBrainsMono-Bold', fontSize: 11, color: colors.accent, minWidth: 32 },
-  genPatch: { fontFamily: 'JetBrainsMono-Regular', fontSize: 10, color: colors.cyan, flex: 1, textAlign: 'right' },
-  forecastRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border },
-  forecastTime: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.textTertiary, minWidth: 32 },
-  forecastBar: { flex: 1 },
-  forecastTrack: { height: 4, backgroundColor: colors.surfaceElevated, borderRadius: 2, overflow: 'hidden' },
-  forecastFill: { height: 4, borderRadius: 2 },
-  forecastPct: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, minWidth: 36, textAlign: 'right' },
-  latencyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border },
-  latencyIdx: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.textTertiary, minWidth: 24 },
-  latencyVal: { fontFamily: 'JetBrainsMono-Bold', fontSize: 12, color: colors.accent },
-  latencyJitter: { fontFamily: 'JetBrainsMono-Regular', fontSize: 10, color: colors.warning, flex: 1, textAlign: 'right' },
-  nodeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
-  nodeDot: { width: 8, height: 8, borderRadius: 4 },
-  nodeName: { fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color: colors.textPrimary, flex: 1 },
-  nodeRegion: { fontFamily: 'JetBrainsMono-Regular', fontSize: 10, color: colors.textTertiary },
-  nodeLoad: { fontFamily: 'JetBrainsMono-Bold', fontSize: 10, color: colors.accent, minWidth: 36, textAlign: 'right' },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
+  infoRowLast: { borderBottomWidth: 0 },
   infoLabel: { fontFamily: 'JetBrainsMono-Regular', fontSize: 12, color: colors.textTertiary },
   infoValue: { fontFamily: 'JetBrainsMono-Bold', fontSize: 12, color: colors.textPrimary },
   scenarioRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
