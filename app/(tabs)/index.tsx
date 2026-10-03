@@ -5,9 +5,10 @@ import {
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
-import { pipelineStore, JobRecord, PHASES_ORDER } from '@/pipeline/pipelineStore';
+import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
+import { investigateRunner } from '@/pipeline/investigateRunner';
+import type { AgentStep } from '@/agent/agentLoop';
 import { classLoader } from '@/classdata/classLoader';
-import { partitionRunner } from '@/pipeline/partitionRunner';
 
 interface StagedApk {
   path: string;
@@ -39,6 +40,7 @@ export default function JobsTab() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [liveSteps, setLiveSteps] = useState<string[]>([]);
 
   const loadStaged = useCallback(async () => {
     const list = await apkPicker.list();
@@ -93,11 +95,12 @@ export default function JobsTab() {
   const doRun = async () => {
     if (!selected || running) return;
     setRunning(true);
+    setLiveSteps([]);
     setRunStatus('1/3 dumping classes…');
     try {
       const scanId = 'job-' + Date.now();
       const load = await classLoader.load(scanId, selected.path);
-      setRunStatus('2/3 cache=' + load.totalClasses + ' classes. calling DeepSeek partition…');
+      setRunStatus('2/3 cache=' + load.totalClasses + ' classes. launching investigation…');
 
       const job = await pipelineStore.createJob({
         scanId,
@@ -106,14 +109,28 @@ export default function JobsTab() {
         apkSize: selected.size,
       });
       await pipelineStore.createPhasesForJob(job.id);
-      await pipelineStore.setJobState(job.id, 'partitioning');
-      await pipelineStore.setCurrent(job.id, 'partition');
-
-      const part = await partitionRunner.run(job);
       await pipelineStore.setJobState(job.id, 'queued');
-      await pipelineStore.setCurrent(job.id, null);
 
-      setRunStatus('3/3 done · ' + part.unitCount + ' units in ' + part.elapsedMs + 'ms · chat=' + part.chatId.slice(0, 8));
+      setRunStatus('3/3 investigating (live)…');
+
+      const investigation = await investigateRunner.run({
+        jobId: job.id,
+        phase: 'partition',
+        query: 'Find every third-party SDK the app links by name (Sentry, Firebase, Adjust, Tencent, Facebook, LINE, etc.). For each SDK, note which class references it.',
+        onStep: (step: AgentStep) => {
+          const label = step.kind === 'tool'
+            ? '#' + step.iteration + '  tool ' + step.tool + '  (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
+            : step.kind === 'final'
+              ? '#' + step.iteration + '  final'
+              : '#' + step.iteration + '  parse_error';
+          setLiveSteps(prev => [...prev, label]);
+        },
+      });
+
+      setRunStatus(
+        'done · ' + investigation.toolCallCount + ' tool calls · ' +
+        investigation.totalMs + 'ms · inv=' + investigation.investigationId.slice(0, 8)
+      );
       await loadJobs();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -198,6 +215,13 @@ export default function JobsTab() {
                 {runStatus}
               </Text>
             )}
+            {liveSteps.length > 0 && (
+              <View style={{ marginTop: 8 }}>
+                {liveSteps.map((line, i) => (
+                  <Text key={i} style={styles.stepText}>{line}</Text>
+                ))}
+              </View>
+            )}
           </View>
         )}
 
@@ -276,6 +300,10 @@ const styles = StyleSheet.create({
   statusText: {
     color: colors.accent, fontFamily: 'JetBrainsMono-Regular',
     fontSize: 10, marginTop: 10, lineHeight: 14,
+  },
+  stepText: {
+    color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10, lineHeight: 14,
   },
   jobRow: {
     paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border,

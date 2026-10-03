@@ -108,6 +108,7 @@ export const agentLoop = {
     query: string;
     apkHint?: string;
     maxIterations?: number;
+    onStep?: (step: AgentStep) => void;
   }): Promise<AgentResult> {
     const t0 = Date.now();
     const maxIter = args.maxIterations ?? MAX_ITERATIONS;
@@ -169,13 +170,17 @@ export const agentLoop = {
       const parsed = parseReply(r.content);
 
       if (parsed.kind === 'final') {
-        steps.push({ iteration: i, kind: 'final', final: parsed.final, elapsedMs: Date.now() - iterStart });
+        const finalStep: AgentStep = { iteration: i, kind: 'final', final: parsed.final, elapsedMs: Date.now() - iterStart };
+        steps.push(finalStep);
+        try { args.onStep?.(finalStep); } catch {}
         final = parsed.final;
         break;
       }
 
       if (parsed.kind === 'parse_error') {
-        steps.push({ iteration: i, kind: 'parse_error', raw: parsed.raw, elapsedMs: Date.now() - iterStart });
+        const errStep: AgentStep = { iteration: i, kind: 'parse_error', raw: parsed.raw, elapsedMs: Date.now() - iterStart };
+        steps.push(errStep);
+        try { args.onStep?.(errStep); } catch {}
         transcript.push('ASSISTANT (unparseable):');
         transcript.push(parsed.raw.slice(0, 400));
         transcript.push('');
@@ -194,7 +199,7 @@ export const agentLoop = {
       const toolMs = Date.now() - toolStart;
 
       const trimmed = trimResult(toolResult);
-      steps.push({
+      const toolStep: AgentStep = {
         iteration: i,
         kind: 'tool',
         tool: toolName,
@@ -202,7 +207,9 @@ export const agentLoop = {
         resultPreview: trimmed.slice(0, 300),
         resultChars: trimmed.length,
         elapsedMs: toolMs,
-      });
+      };
+      steps.push(toolStep);
+      try { args.onStep?.(toolStep); } catch {}
 
       eventBus.emit({
         scanId, correlationId: scanId, phase: 'analyze',
