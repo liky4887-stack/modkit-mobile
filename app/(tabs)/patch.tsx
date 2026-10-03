@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, TextInput,
+  Modal, Pressable,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
@@ -55,6 +56,9 @@ export default function PatchScreen() {
 
   // ── Real backend state ──────────────────────────────────────────
   const [apkPath, setApkPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseList, setBrowseList] = useState<Array<{ path: string; size: number }>>([]);
+  const [browseLoading, setBrowseLoading] = useState(false);
   const [realLoading, setRealLoading] = useState(false);
   const [realError, setRealError] = useState<string | null>(null);
   const [currentScanId, setCurrentScanId] = useState<string | null>(null);
@@ -246,6 +250,52 @@ export default function PatchScreen() {
     return phaseResults;
   }, [apkPath, currentScanId]);
 
+  const browseForApks = async () => {
+    setBrowseOpen(true);
+    setBrowseLoading(true);
+    setBrowseList([]);
+    try {
+      const roots = [
+        '/storage/emulated/0/Download',
+        '/storage/emulated/0/SHAREit Lite/apps',
+        '/storage/emulated/0/Android/data',
+        '/storage/emulated/0/',
+        '/data/data/com.termux/files/home',
+      ];
+      const seen = new Set<string>();
+      const out: Array<{ path: string; size: number }> = [];
+      for (const root of roots) {
+        try {
+          const r = await factoryExec.run('find', [root, '-maxdepth', '4', '-name', '*.apk', '-type', 'f'], { timeoutMs: 15000 });
+          if (r.result.exitCode !== 0) continue;
+          for (const line of r.result.stdout.split('\n')) {
+            const p = line.trim();
+            if (!p || seen.has(p)) continue;
+            seen.add(p);
+            // stat for size
+            let size = 0;
+            try {
+              const st = await factoryExec.run('ls', ['-la', p], { timeoutMs: 3000 });
+              const m = st.result.stdout.match(/\s(\d+)\s/);
+              if (m) size = parseInt(m[1], 10);
+            } catch {}
+            out.push({ path: p, size });
+          }
+        } catch {}
+      }
+      out.sort((a, b) => b.size - a.size);
+      setBrowseList(out);
+    } catch (e) {
+      setLogs((l) => [...l, {
+        level: 'warn',
+        msg: '[BROWSE] ' + (e instanceof Error ? e.message : String(e)),
+        ts: Date.now(),
+      }]);
+    } finally {
+      setBrowseLoading(false);
+    }
+  };
+
   const dumpHttpLog = async () => {
     try {
       const body = httpLog.dump();
@@ -381,22 +431,86 @@ export default function PatchScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {step === 0 && (
           <View style={{ paddingHorizontal: spacing.md, marginTop: spacing.md }}>
-            <Panel title="APK PATH ON DEVICE">
+            <Panel title="SELECT APK ON DEVICE">
               <Text style={styles.pathHelp}>
-                Enter the absolute path. The Termux backend reads the file directly —
-                no upload, works for multi-gigabyte APKs.
+                Tap Browse to pick from the APKs the Termux backend can see.
+                Or paste an absolute path below.
               </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                <Pressable
+                  onPress={browseForApks}
+                  disabled={realLoading || browseLoading}
+                  style={[styles.browseBtn, { flex: 1 }]}
+                >
+                  <Text style={styles.browseBtnText}>
+                    {browseLoading ? 'SCANNING…' : 'BROWSE APKS'}
+                  </Text>
+                </Pressable>
+              </View>
               <TextInput
                 value={apkPath}
                 onChangeText={setApkPath}
-                placeholder="/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk"
+                placeholder="/storage/emulated/0/.../app.apk"
                 placeholderTextColor={colors.textTertiary}
                 style={styles.pathInput}
                 autoCapitalize="none"
                 autoCorrect={false}
                 editable={!realLoading}
               />
+              {apkPath.trim().length > 0 && (
+                <Text style={{ fontFamily: 'Inter-Regular', fontSize: 10, color: colors.textTertiary, marginTop: 6 }}>
+                  Selected: {apkPath.split('/').pop()}
+                </Text>
+              )}
             </Panel>
+
+            <Modal
+              visible={browseOpen}
+              animationType="slide"
+              transparent
+              onRequestClose={() => setBrowseOpen(false)}
+            >
+              <View style={styles.modalBackdrop}>
+                <View style={styles.modalCard}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>
+                      {browseLoading ? 'Scanning device…' : browseList.length + ' APK' + (browseList.length === 1 ? '' : 's') + ' found'}
+                    </Text>
+                    <Pressable onPress={() => setBrowseOpen(false)} hitSlop={8}>
+                      <Text style={{ color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 13 }}>CLOSE</Text>
+                    </Pressable>
+                  </View>
+                  {browseList.length === 0 && !browseLoading && (
+                    <Text style={{ color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 12, padding: 16 }}>
+                      No APK files found in the scanned roots. Paste a full path below.
+                    </Text>
+                  )}
+                  <ScrollView style={{ maxHeight: 420 }}>
+                    {browseList.map((it) => {
+                      const name = it.path.split('/').pop() || it.path;
+                      const mb = (it.size / 1024 / 1024).toFixed(1);
+                      const selected = apkPath === it.path;
+                      return (
+                        <Pressable
+                          key={it.path}
+                          onPress={() => {
+                            setApkPath(it.path);
+                            setBrowseOpen(false);
+                          }}
+                          style={[styles.modalRow, selected && styles.modalRowSelected]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.modalRowTitle} numberOfLines={1}>{name}</Text>
+                            <Text style={styles.modalRowSub} numberOfLines={1}>{it.path}</Text>
+                          </View>
+                          <Text style={styles.modalRowSize}>{mb} MB</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              </View>
+            </Modal>
             {realError && (
               <View style={{ marginTop: spacing.sm }}>
                 <Panel title="ERROR">
@@ -1062,6 +1176,74 @@ function levelColor(level: string): string {
 }
 
 const styles = StyleSheet.create({
+  browseBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  browseBtnText: {
+    color: colors.pureBlack,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 12,
+    letterSpacing: 0.5,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    marginBottom: 8,
+  },
+  modalTitle: {
+    color: colors.textPrimary,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 14,
+  },
+  modalRow: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalRowSelected: {
+    backgroundColor: 'rgba(0,255,136,0.08)',
+  },
+  modalRowTitle: {
+    color: colors.textPrimary,
+    fontFamily: 'Inter-Medium',
+    fontSize: 13,
+  },
+  modalRowSub: {
+    color: colors.textTertiary,
+    fontFamily: 'Inter-Regular',
+    fontSize: 10,
+    marginTop: 2,
+  },
+  modalRowSize: {
+    color: colors.accent,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 12,
+  },
+
   featureRowWrap: {
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
