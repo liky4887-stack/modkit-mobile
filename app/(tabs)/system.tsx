@@ -4,6 +4,9 @@ import {
 } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { colors } from '@/theme/colors';
+import { Pressable } from 'react-native';
+import { deepseekClient } from '@/chat/deepseekClient';
+import { chatRegistry } from '@/chat/chatRegistry';
 import { spacing } from '@/theme';
 
 interface SysStats {
@@ -77,6 +80,29 @@ function ago(ts: number | null): string {
 export default function SystemTab() {
   const [s, setS] = useState<SysStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const runDeepseekTest = useCallback(async () => {
+    setTestBusy(true);
+    setTestResult(null);
+    try {
+      const r = await deepseekClient.send(
+        'Reply with exactly: PONG',
+        { phase: 'diagnostic', purpose: 'system_test', maxRetries: 1, timeoutMs: 60000 }
+      );
+      const sessions = await chatRegistry.listRecent(3);
+      setTestResult(
+        'OK · ' + r.elapsedMs + 'ms · ' + r.content.slice(0, 40) +
+        ' · chat=' + r.chatId.slice(0, 8) +
+        ' · ds=' + (r.dsSessionId ? r.dsSessionId.slice(0, 8) : 'null') +
+        ' · rows=' + sessions.length
+      );
+    } catch (e) {
+      setTestResult('FAIL · ' + (e instanceof Error ? e.message : String(e)));
+    }
+    setTestBusy(false);
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -143,6 +169,24 @@ export default function SystemTab() {
           <Text style={styles.blockMeta}>
             last event: {ago(s?.lastEventTs ?? null)} · last http: {ago(s?.lastHttpTs ?? null)}
           </Text>
+        </View>
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>DIAGNOSTICS</Text>
+          <Pressable
+            onPress={runDeepseekTest}
+            disabled={testBusy}
+            style={[styles.testBtn, testBusy && { opacity: 0.5 }]}
+          >
+            <Text style={styles.testBtnText}>
+              {testBusy ? 'CALLING DEEPSEEK…' : 'TEST DEEPSEEK'}
+            </Text>
+          </Pressable>
+          {testResult && (
+            <Text style={[styles.blockMeta, { marginTop: 8, color: testResult.startsWith('OK') ? colors.accent : colors.danger }]}>
+              {testResult}
+            </Text>
+          )}
         </View>
 
         <View style={styles.block}>
@@ -225,5 +269,18 @@ const styles = StyleSheet.create({
     fontSize: 9,
     letterSpacing: 1,
     marginTop: 2,
+  },
+  testBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 6,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  testBtnText: {
+    color: colors.pureBlack,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    letterSpacing: 1,
   },
 });
