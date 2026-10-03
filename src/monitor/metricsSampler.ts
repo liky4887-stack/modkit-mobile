@@ -1,17 +1,15 @@
 // Samples backend health + DB state every intervalMs into metric_snapshots.
 // Started once from the app root; idempotent.
 import * as SQLite from 'expo-sqlite';
+import { getDb } from '@/db/client';
 
 const BACKEND = 'http://127.0.0.1:8790';
 const DEFAULT_INTERVAL_MS = 10000;
 
 let _timer: ReturnType<typeof setInterval> | null = null;
-let _db: SQLite.SQLiteDatabase | null = null;
 
 async function db(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync('modkit.db');
-  return _db;
+  return getDb();
 }
 
 interface BackendHealth {
@@ -36,8 +34,9 @@ async function fetchBackendHealth(): Promise<BackendHealth> {
 }
 
 async function sample(jobId: string | null): Promise<void> {
-  const d = await db();
-  const now = Date.now();
+  try {
+    const d = await db();
+    const now = Date.now();
   const oneMinAgo = now - 60000;
 
   const health = await fetchBackendHealth();
@@ -97,7 +96,10 @@ async function sample(jobId: string | null): Promise<void> {
       events1m.n || 0,
       errors1m.n || 0,
     ]
-  );
+    );
+  } catch {
+    // never throw into the sampler
+  }
 }
 
 export function startMetricsSampler(jobId: string | null = null, intervalMs = DEFAULT_INTERVAL_MS): void {

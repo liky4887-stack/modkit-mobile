@@ -1,13 +1,11 @@
 // Persist httpLog entries into SQLite. Keeps httpLog itself pure.
 import * as SQLite from 'expo-sqlite';
+import { getDb } from '@/db/client';
 
-let _db: SQLite.SQLiteDatabase | null = null;
 let _unsub: (() => void) | null = null;
 
 async function db(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync('modkit.db');
-  return _db;
+  return getDb();
 }
 
 function extractPath(url: string): string | null {
