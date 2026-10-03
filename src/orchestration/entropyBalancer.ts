@@ -67,15 +67,15 @@ export function compareToExpectation(
   const center = (e.min + e.max) / 2;
 
   if (p.shannonEntropy >= e.min && p.shannonEntropy <= e.max) {
-    // inside band
-    const offset = Math.abs(p.shannonEntropy - center) / (span / 2);
+    // Inside band → zero drift. Deviation measures band violation, not
+    // distance from center.
     return {
       path: p.path,
       region: p.region,
       observed: p.shannonEntropy,
       expectedMin: e.min,
       expectedMax: e.max,
-      deviation: Math.min(1, offset),
+      deviation: 0,
       action: 'none',
       rationale: 'within expected band',
     };
