@@ -122,13 +122,16 @@ export const agentLoop = {
 
     // Build initial prompt
     const preamble = systemPreamble();
-    const ctx: string[] = [];
-    ctx.push('The user asks:');
-    ctx.push('"' + args.query + '"');
-    ctx.push('');
-    ctx.push('Make your first call.');
+    const userBlock = [
+      'The user asks:',
+      '"' + args.query + '"',
+      '',
+    ].join('\n');
 
-    let prompt = preamble + '\n\n' + ctx.join('\n');
+    // Full transcript, rebuilt each turn. The cookie bridge does not
+    // maintain server-side conversation state, so we must resend
+    // everything every iteration.
+    const transcript: string[] = [];
 
     let chatId = '';
     let dsSessionId: string | null = null;
@@ -137,7 +140,18 @@ export const agentLoop = {
     for (let i = 0; i < maxIter; i++) {
       const iterStart = Date.now();
 
-      // Send to DeepSeek. Reuse chat for multi-turn context.
+      // Assemble prompt from the full transcript
+      const sections: string[] = [preamble, '', userBlock];
+      if (transcript.length > 0) {
+        sections.push('=== CONVERSATION SO FAR ===');
+        for (const line of transcript) sections.push(line);
+        sections.push('=== END CONVERSATION SO FAR ===');
+        sections.push('');
+      }
+      sections.push('Your reply (one JSON object only):');
+      const prompt = sections.join('\n');
+
+      // Send to DeepSeek. Reuse local chat row for persistence.
       const r = await deepseekClient.send(prompt, {
         jobId: args.jobId ?? null,
         phase: 'analyze',
@@ -162,13 +176,12 @@ export const agentLoop = {
 
       if (parsed.kind === 'parse_error') {
         steps.push({ iteration: i, kind: 'parse_error', raw: parsed.raw, elapsedMs: Date.now() - iterStart });
-        // Feed a repair instruction back
-        prompt = [
-          'Your previous reply could not be parsed as the required JSON.',
-          'It began with: ' + parsed.raw.slice(0, 200),
-          '',
-          'Reply with ONE JSON object only: {"tool":"...","args":{...}} or {"final":"..."}. No prose. No fences.',
-        ].join('\n');
+        transcript.push('ASSISTANT (unparseable):');
+        transcript.push(parsed.raw.slice(0, 400));
+        transcript.push('');
+        transcript.push('Your previous reply could not be parsed as JSON. Reply with ONE JSON object only:');
+        transcript.push('  {"tool":"<method>","args":{...}}  OR  {"final":"<markdown report>"}');
+        transcript.push('');
         continue;
       }
 
@@ -203,13 +216,13 @@ export const agentLoop = {
         },
       });
 
-      // Feed result back in the same conversation
-      prompt = [
-        'Result of ' + toolName + ':',
-        trimmed,
-        '',
-        'Now decide: another tool call, or final answer. Reply with ONE JSON object only.',
-      ].join('\n');
+      // Append to transcript for next iteration
+      transcript.push('ASSISTANT:');
+      transcript.push(JSON.stringify({ tool: toolName, args: toolArgs }));
+      transcript.push('');
+      transcript.push('TOOL RESULT (' + toolName + '):');
+      transcript.push(trimmed);
+      transcript.push('');
     }
 
     if (!final) {
