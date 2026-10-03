@@ -250,7 +250,7 @@ export const chatApi = {
 
 // ── Per-feature DeepSeek analysis ────────────────────────────────
 const FEATURE_ANALYZE_SCRIPT = `${SOVEREIGN_HOME}/feature-analyze.cjs`;
-const TMP_DIR = '/data/data/com.termux/files/home/sovereign-factory/tmp';
+const TMP_DIR = '/data/data/com.termux/files/home/sovereign-core-data/modkit-tmp';
 
 export interface FeatureInsight {
   purpose: string;
