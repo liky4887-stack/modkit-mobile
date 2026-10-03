@@ -150,7 +150,7 @@ export const agentLoop = {
         reuseChatId: chatId || null,
         maxRetries: 1,
         timeoutMs: 180000,
-        mode: 'plan',
+        mode: 'raw',
       } as any);
 
       if (!chatId) chatId = r.chatId;
