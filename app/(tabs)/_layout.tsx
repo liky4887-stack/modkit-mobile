@@ -1,48 +1,65 @@
 import { Tabs } from 'expo-router';
 import { colors } from '@/theme/colors';
-import { Terminal, Wrench, Layers, Settings, BookOpen, History } from 'lucide-react-native';
-import type { LucideIcon } from 'lucide-react-native';
-
-function makeTabIcon(Icon: LucideIcon) {
-  return ({ focused, size }: { focused: boolean; size: number }) => (
-    <Icon size={size} color={focused ? colors.accent : colors.textTertiary} strokeWidth={2} />
-  );
-}
+import { Activity, Radio, MessageSquare, Settings } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.accent,
-        tabBarInactiveTintColor: colors.textTertiary,
         tabBarStyle: {
           backgroundColor: colors.pureBlack,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 58,
-          paddingBottom: 6,
           paddingTop: 6,
+          height: 62,
         },
+        tabBarActiveTintColor: colors.accent,
+        tabBarInactiveTintColor: colors.textTertiary,
         tabBarLabelStyle: {
-          fontFamily: 'JetBrainsMono-Bold',
+          fontFamily: 'Inter-Medium',
           fontSize: 9,
-          letterSpacing: 0.5,
-          textTransform: 'uppercase',
+          letterSpacing: 1,
           marginTop: 2,
-        },
-        tabBarItemStyle: {
-          paddingVertical: 4,
         },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: 'Console', tabBarIcon: makeTabIcon(Terminal) }} />
-      <Tabs.Screen name="patch" options={{ title: 'Patch', tabBarIcon: makeTabIcon(Wrench) }} />
-      <Tabs.Screen name="features" options={{ title: 'Modules', tabBarIcon: makeTabIcon(Layers) }} />
-      <Tabs.Screen name="history" options={{ title: 'History', tabBarIcon: makeTabIcon(History) }} />
-      <Tabs.Screen name="sovereign-factory" options={{ title: 'Sovereign', tabBarIcon: makeTabIcon(BookOpen) }} />
-      <Tabs.Screen name="settings" options={{ title: 'Config', tabBarIcon: makeTabIcon(Settings) }} />
-      <Tabs.Screen name="clean" options={{ href: null }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'JOBS',
+          tabBarIcon: ({ color, size }) => (
+            <Activity size={size - 4} color={color} strokeWidth={2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="monitor"
+        options={{
+          title: 'MONITOR',
+          tabBarIcon: ({ color, size }) => (
+            <Radio size={size - 4} color={color} strokeWidth={2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="chats"
+        options={{
+          title: 'CHATS',
+          tabBarIcon: ({ color, size }) => (
+            <MessageSquare size={size - 4} color={color} strokeWidth={2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="system"
+        options={{
+          title: 'SYSTEM',
+          tabBarIcon: ({ color, size }) => (
+            <Settings size={size - 4} color={color} strokeWidth={2} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

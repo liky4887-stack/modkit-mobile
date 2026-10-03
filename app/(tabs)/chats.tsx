@@ -3,18 +3,18 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 
-export default function JobsTab() {
+export default function ChatsTab() {
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <Text style={styles.topBarTitle}>MODKIT · JOBS</Text>
+        <Text style={styles.topBarTitle}>MODKIT · CHATS</Text>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>NO JOBS YET</Text>
+          <Text style={styles.emptyTitle}>NO ACTIVE CHATS</Text>
           <Text style={styles.emptySub}>
-            Pipeline runner wires in Session 09.{'\n'}
-            This screen will show job progress, truth ledger, and artifacts.
+            Chat lifecycle manager wires in Session 03.{'\n'}
+            This screen will show every DeepSeek session with turns, tokens, and transcripts.
           </Text>
         </View>
       </ScrollView>
@@ -37,11 +37,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   content: { padding: spacing.md },
-  empty: {
-    marginTop: 80,
-    alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-  },
+  empty: { marginTop: 80, alignItems: 'center', paddingHorizontal: spacing.xl },
   emptyTitle: {
     color: colors.textTertiary,
     fontFamily: 'Inter-SemiBold',

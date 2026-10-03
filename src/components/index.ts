@@ -15,6 +15,3 @@ export { FeatureCard } from './FeatureCard';
 export { FeatureListItem } from './FeatureListItem';
 export { WarningBanner } from './WarningBanner';
 export { EmptyState } from './EmptyState';
-export { SovereignLink } from './SovereignLink';
-export { PatchPlanPanel } from './PatchPlanPanel';
-export { FindingChat } from './FindingChat';

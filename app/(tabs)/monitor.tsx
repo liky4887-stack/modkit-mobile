@@ -3,18 +3,18 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 
-export default function JobsTab() {
+export default function MonitorTab() {
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <Text style={styles.topBarTitle}>MODKIT · JOBS</Text>
+        <Text style={styles.topBarTitle}>MODKIT · MONITOR</Text>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>NO JOBS YET</Text>
+          <Text style={styles.emptyTitle}>NO EVENTS</Text>
           <Text style={styles.emptySub}>
-            Pipeline runner wires in Session 09.{'\n'}
-            This screen will show job progress, truth ledger, and artifacts.
+            event_log + http_log persist in Session 02.{'\n'}
+            This screen will stream every event, HTTP call, and SQLite write.
           </Text>
         </View>
       </ScrollView>
@@ -37,11 +37,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   content: { padding: spacing.md },
-  empty: {
-    marginTop: 80,
-    alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-  },
+  empty: { marginTop: 80, alignItems: 'center', paddingHorizontal: spacing.xl },
   emptyTitle: {
     color: colors.textTertiary,
     fontFamily: 'Inter-SemiBold',

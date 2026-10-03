@@ -6,7 +6,10 @@ let _db: SQLite.SQLiteDatabase | null = null;
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
   const db = await SQLite.openDatabaseAsync(DB_NAME);
+  await db.execAsync('PRAGMA journal_mode = WAL;');
   await db.execAsync('PRAGMA foreign_keys = ON;');
+  await db.execAsync('PRAGMA synchronous = NORMAL;');
+  await db.execAsync('PRAGMA busy_timeout = 5000;');
   await migrate(db);
   _db = db;
   return db;

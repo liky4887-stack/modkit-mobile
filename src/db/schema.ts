@@ -1,8 +1,9 @@
+import { MIGRATION_V8 } from './migrations/v8_pipeline';
 import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const DB_NAME = 'modkit.db';
 
 export interface ScanRecord {
@@ -237,4 +238,6 @@ export const MIGRATIONS: string[][] = [
   ],
   // v7 — orchestration graph
   [MIGRATION_V7],
+  // v8 — pipeline core
+  [MIGRATION_V8],
 ];
