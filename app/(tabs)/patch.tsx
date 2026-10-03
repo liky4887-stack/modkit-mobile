@@ -272,12 +272,16 @@ export default function PatchScreen() {
             const p = line.trim();
             if (!p || seen.has(p)) continue;
             seen.add(p);
-            // stat for size
+            // ls -la fields: [mode, links, owner, group, SIZE, month, day, time, path...]
+            // size is index 4. Older regex grabbed links (index 1) → always 0-1 byte.
             let size = 0;
             try {
               const st = await factoryExec.run('ls', ['-la', p], { timeoutMs: 3000 });
-              const m = st.result.stdout.match(/\s(\d+)\s/);
-              if (m) size = parseInt(m[1], 10);
+              if (st.result.exitCode === 0) {
+                const parts = st.result.stdout.trim().split(/\s+/);
+                const n = parseInt(parts[4], 10);
+                if (isFinite(n)) size = n;
+              }
             } catch {}
             out.push({ path: p, size });
           }
