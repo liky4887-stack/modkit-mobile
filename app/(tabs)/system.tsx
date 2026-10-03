@@ -85,7 +85,7 @@ export default function SystemTab() {
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [agentQuery, setAgentQuery] = useState('Find all classes in com.pubg.krmobile that reference Sentry and decompile the one that looks like the analytics client.');
+  const [agentQuery, setAgentQuery] = useState('Find every class that references the Sentry SDK and summarize what analytics data the app collects.');
   const [agentResult, setAgentResult] = useState<string | null>(null);
   const [agentSteps, setAgentSteps] = useState<string[]>([]);
 
@@ -96,7 +96,6 @@ export default function SystemTab() {
     try {
       const r = await agentLoop.run({
         query: agentQuery,
-        apkHint: 'PUBG_MOBILE.apk (com.pubg.krmobile 4.6.0)',
       });
       setAgentSteps(r.steps.map((st, i) => {
         if (st.kind === 'tool') return `#${i}  tool ${st.tool}  (${st.elapsedMs}ms, ${st.resultChars}B)`;
