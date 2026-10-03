@@ -28,6 +28,7 @@ export interface HandlerContext {
   obb: UploadedFile | null;
   results: Record<string, FeatureResult>;
   log: (level: 'info' | 'success' | 'warn' | 'error' | 'debug', message: string) => void;
+  scanId?: string;
 }
 
 export type FeatureHandler = (ctx: HandlerContext) => Promise<FeatureResult>;

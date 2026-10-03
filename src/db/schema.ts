@@ -1,7 +1,7 @@
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 6;
 export const DB_NAME = 'modkit.db';
 
 export interface ScanRecord {
@@ -42,6 +42,66 @@ export interface ChatRecord {
   featureId: string;
   role: 'user' | 'assistant';
   content: string;
+  createdAt: number;
+}
+
+export interface InsightRecord {
+  id: number;
+  scanId: string;
+  featureId: string;
+  purpose: string;
+  howItWorks: string;
+  risk: string;
+  riskReason: string;
+  technical: string;
+  recommendation: string;
+  patchHint: string;
+  createdAt: number;
+}
+
+export interface EditRecord {
+  id: number;
+  scanId: string;
+  featureId: string;
+  approach: string;
+  target: string;
+  method: string;
+  language: string;
+  payload: string;
+  before: string;
+  after: string;
+  impact: string;
+  verification: string;
+  risk: string;
+  createdAt: number;
+}
+
+export interface PreviewRecord {
+  id: number;
+  scanId: string;
+  featureId: string;
+  scenario: string;
+  ifApplied: string;
+  ifNotApplied: string;
+  sideEffects: string;
+  confidence: string;
+  recommendation: string;
+  createdAt: number;
+}
+
+export interface ArtifactRecord {
+  id: number;
+  scanId: string;
+  featureId: string;
+  name: string;
+  type: string;
+  contents: string;
+  installInstructions: string;
+  verification: string;
+  dependencies: string;
+  risk: string;
+  sizeBytes: number;
+  checksum: string;
   createdAt: number;
 }
 
@@ -97,5 +157,81 @@ export const MIGRATIONS: string[][] = [
       FOREIGN KEY (scanId) REFERENCES scans(id) ON DELETE CASCADE
     );`,
     `CREATE INDEX IF NOT EXISTS idx_finding_chats_thread ON finding_chats(scanId, featureId, createdAt);`,
+  ],
+  // v3 — per-feature DeepSeek insights
+  [
+    `CREATE TABLE IF NOT EXISTS finding_insights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scanId TEXT NOT NULL,
+      featureId TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      howItWorks TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      riskReason TEXT NOT NULL,
+      technical TEXT NOT NULL,
+      recommendation TEXT NOT NULL,
+      patchHint TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (scanId) REFERENCES scans(id) ON DELETE CASCADE
+    );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_insights_unique ON finding_insights(scanId, featureId);`,
+  ],
+  // v4 — per-feature patch payloads (Edit phase)
+  [
+    `CREATE TABLE IF NOT EXISTS finding_edits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scanId TEXT NOT NULL,
+      featureId TEXT NOT NULL,
+      approach TEXT NOT NULL,
+      target TEXT NOT NULL,
+      method TEXT NOT NULL,
+      language TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      before TEXT NOT NULL,
+      after TEXT NOT NULL,
+      impact TEXT NOT NULL,
+      verification TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (scanId) REFERENCES scans(id) ON DELETE CASCADE
+    );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_edits_unique ON finding_edits(scanId, featureId);`,
+  ],
+  // v5 — per-feature previews
+  [
+    `CREATE TABLE IF NOT EXISTS finding_previews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scanId TEXT NOT NULL,
+      featureId TEXT NOT NULL,
+      scenario TEXT NOT NULL,
+      ifApplied TEXT NOT NULL,
+      ifNotApplied TEXT NOT NULL,
+      sideEffects TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      recommendation TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (scanId) REFERENCES scans(id) ON DELETE CASCADE
+    );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_previews_unique ON finding_previews(scanId, featureId);`,
+  ],
+  // v6 — per-feature export artifacts
+  [
+    `CREATE TABLE IF NOT EXISTS finding_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scanId TEXT NOT NULL,
+      featureId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      contents TEXT NOT NULL,
+      installInstructions TEXT NOT NULL,
+      verification TEXT NOT NULL,
+      dependencies TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      sizeBytes INTEGER NOT NULL,
+      checksum TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (scanId) REFERENCES scans(id) ON DELETE CASCADE
+    );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_artifacts_unique ON finding_artifacts(scanId, featureId);`,
   ],
 ];

@@ -169,6 +169,7 @@ export default function PatchScreen() {
       } : null,
       obb: null,
       results: {},
+      scanId: currentScanId ?? undefined,
       log: (level, msg) => setLogs((l) => [...l, { level, msg, ts: Date.now() }]),
     };
 
@@ -180,7 +181,7 @@ export default function PatchScreen() {
     setRunning(false);
     setCurrentFeatureId(null);
     return phaseResults;
-  }, [apkPath]);
+  }, [apkPath, currentScanId]);
 
   const handleBack = () => {
     if (running) return;
@@ -577,6 +578,7 @@ function PhaseStep({
   const doneCount = results.length;
   const hasErrors = results.some((r) => r.status === 'error');
   const hasWarnings = results.some((r) => r.status === 'warn');
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
 
   return (
     <View style={styles.section}>
@@ -590,42 +592,60 @@ function PhaseStep({
           const r = byId.get(id);
           const isRunning = running && currentFeatureId === id;
           const isPending = !r && !isRunning;
+          const expanded = expandedId === id;
+          const rich = r?.data;
+
           return (
-            <View key={id} style={styles.featureRow}>
-              <View style={styles.featureIconWrap}>
-                {isRunning ? (
-                  <ActivityIndicator size="small" color={colors.accent} />
-                ) : r?.status === 'ok' ? (
-                  <CircleCheck size={16} color={colors.accent} strokeWidth={2} />
-                ) : r?.status === 'warn' ? (
-                  <AlertTriangle size={16} color={colors.warning} strokeWidth={2} />
-                ) : r?.status === 'error' ? (
-                  <CircleX size={16} color={colors.danger} strokeWidth={2} />
-                ) : r?.status === 'skipped' ? (
-                  <CircleSlash size={16} color={colors.textTertiary} strokeWidth={2} />
-                ) : (
-                  <View style={styles.pendingDot} />
-                )}
-              </View>
-              <View style={styles.featureInfo}>
-                <Text style={[styles.featureName, isPending && styles.featureNamePending]}>
-                  {feature?.shortName ?? id}
-                </Text>
-                <Text style={styles.featureMsg} numberOfLines={2}>
-                  {r?.message ?? (isRunning ? 'Running…' : 'Pending')}
-                </Text>
-                {r?.data && (
-                  <View style={styles.dataRow}>
-                    {Object.entries(r.data).slice(0, 3).map(([k, v]) => (
-                      <View key={k} style={styles.dataChip}>
-                        <Text style={styles.dataChipKey}>{k}</Text>
-                        <Text style={styles.dataChipVal}>{String(v)}</Text>
-                      </View>
-                    ))}
+            <View key={id} style={styles.featureRowWrap}>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setExpandedId(expanded ? null : id)}
+                disabled={isPending || isRunning}
+              >
+                <View style={styles.featureRow}>
+                  <View style={styles.featureIconWrap}>
+                    {isRunning ? (
+                      <ActivityIndicator size="small" color={colors.accent} />
+                    ) : r?.status === 'ok' ? (
+                      <CircleCheck size={16} color={colors.accent} strokeWidth={2} />
+                    ) : r?.status === 'warn' ? (
+                      <AlertTriangle size={16} color={colors.warning} strokeWidth={2} />
+                    ) : r?.status === 'error' ? (
+                      <CircleX size={16} color={colors.danger} strokeWidth={2} />
+                    ) : r?.status === 'skipped' ? (
+                      <CircleSlash size={16} color={colors.textTertiary} strokeWidth={2} />
+                    ) : (
+                      <View style={styles.pendingDot} />
+                    )}
                   </View>
-                )}
-              </View>
-              {r && <Text style={styles.duration}>{r.durationMs}ms</Text>}
+                  <View style={styles.featureInfo}>
+                    <Text style={[styles.featureName, isPending && styles.featureNamePending]}>
+                      {feature?.shortName ?? id}
+                    </Text>
+                    <Text style={styles.featureMsg} numberOfLines={expanded ? 8 : 2}>
+                      {r?.message ?? (isRunning ? 'Running…' : 'Pending')}
+                    </Text>
+                    {r?.data && !expanded && (
+                      <View style={styles.dataRow}>
+                        {Object.entries(r.data)
+                          .filter(([k]) => !isRichKey(k))
+                          .slice(0, 3)
+                          .map(([k, v]) => (
+                            <View key={k} style={styles.dataChip}>
+                              <Text style={styles.dataChipKey}>{k}</Text>
+                              <Text style={styles.dataChipVal} numberOfLines={1}>{String(v)}</Text>
+                            </View>
+                          ))}
+                      </View>
+                    )}
+                  </View>
+                  {r && <Text style={styles.duration}>{r.durationMs}ms</Text>}
+                </View>
+              </TouchableOpacity>
+
+              {expanded && rich && (
+                <RichFeatureDetail phase={phase} data={rich} />
+              )}
             </View>
           );
         })}
@@ -676,6 +696,272 @@ function PhaseStep({
   );
 }
 
+function isRichKey(k: string): boolean {
+  return k.startsWith('insight_') || k.startsWith('edit_') ||
+         k.startsWith('preview_') || k.startsWith('artifact_');
+}
+
+function riskColor(risk: string): string {
+  switch (risk) {
+    case 'critical': return colors.danger;
+    case 'high': return colors.danger;
+    case 'medium': return colors.warning;
+    case 'low': return colors.accent;
+    default: return colors.textTertiary;
+  }
+}
+
+function safeJsonArr(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === 'string') {
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p.map(String) : []; } catch { return []; }
+  }
+  return [];
+}
+
+function RichFeatureDetail({
+  phase, data,
+}: {
+  phase: WorkflowPhase;
+  data: Record<string, string | number>;
+}) {
+  if (phase === 'analyze') {
+    const risk = String(data.insight_risk ?? 'low');
+    const tech = safeJsonArr(data.insight_technical);
+    return (
+      <View style={styles.richWrap}>
+        <View style={styles.richHeader}>
+          <Text style={styles.richLabel}>ANALYSIS</Text>
+          <View style={[styles.riskBadge, { borderColor: riskColor(risk) }]}>
+            <Text style={[styles.riskText, { color: riskColor(risk) }]}>{risk.toUpperCase()}</Text>
+          </View>
+        </View>
+        {!!data.insight_purpose && (
+          <Text style={styles.richBody}>{String(data.insight_purpose)}</Text>
+        )}
+        {!!data.insight_how && (
+          <>
+            <Text style={styles.richSubLabel}>HOW IT WORKS</Text>
+            <Text style={styles.richBody}>{String(data.insight_how)}</Text>
+          </>
+        )}
+        {tech.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>TECHNICAL</Text>
+            {tech.map((t, i) => (
+              <Text key={i} style={styles.richBullet}>• {t}</Text>
+            ))}
+          </>
+        )}
+        {!!data.insight_riskReason && (
+          <>
+            <Text style={styles.richSubLabel}>WHY {risk.toUpperCase()}</Text>
+            <Text style={styles.richBody}>{String(data.insight_riskReason)}</Text>
+          </>
+        )}
+        {!!data.insight_recommendation && (
+          <>
+            <Text style={styles.richSubLabel}>RECOMMENDATION</Text>
+            <Text style={[styles.richBody, { color: colors.accent }]}>{String(data.insight_recommendation)}</Text>
+          </>
+        )}
+        {!!data.insight_patchHint && (
+          <>
+            <Text style={styles.richSubLabel}>PATCH HINT</Text>
+            <Text style={styles.richMono} numberOfLines={4}>{String(data.insight_patchHint)}</Text>
+          </>
+        )}
+      </View>
+    );
+  }
+
+  if (phase === 'edit') {
+    const approach = String(data.edit_approach ?? 'no-action');
+    const lang = String(data.edit_language ?? 'text');
+    const payload = String(data.edit_payload ?? '');
+    const risk = String(data.edit_risk ?? 'low');
+    return (
+      <View style={styles.richWrap}>
+        <View style={styles.richHeader}>
+          <Text style={styles.richLabel}>PATCH · {approach}</Text>
+          <View style={[styles.riskBadge, { borderColor: riskColor(risk) }]}>
+            <Text style={[styles.riskText, { color: riskColor(risk) }]}>{risk.toUpperCase()}</Text>
+          </View>
+        </View>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>TARGET</Text>
+          <Text style={styles.kvVal} numberOfLines={2}>{String(data.edit_target ?? '')}</Text>
+        </View>
+        {!!data.edit_method && (
+          <View style={styles.kvRow}>
+            <Text style={styles.kvKey}>METHOD</Text>
+            <Text style={styles.kvVal} numberOfLines={2}>{String(data.edit_method)}</Text>
+          </View>
+        )}
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>LANGUAGE</Text>
+          <Text style={styles.kvVal}>{lang}</Text>
+        </View>
+
+        {payload.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>PAYLOAD</Text>
+            <View style={styles.codeBlock}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <Text style={styles.codeText} selectable>{payload}</Text>
+              </ScrollView>
+            </View>
+          </>
+        )}
+
+        {!!data.edit_impact && (
+          <>
+            <Text style={styles.richSubLabel}>IMPACT</Text>
+            <Text style={styles.richBody}>{String(data.edit_impact)}</Text>
+          </>
+        )}
+        {!!data.edit_verification && (
+          <>
+            <Text style={styles.richSubLabel}>VERIFICATION</Text>
+            <Text style={styles.richBody}>{String(data.edit_verification)}</Text>
+          </>
+        )}
+      </View>
+    );
+  }
+
+  if (phase === 'preview') {
+    const ifApplied = safeJsonArr(data.preview_ifApplied);
+    const ifNotApplied = safeJsonArr(data.preview_ifNotApplied);
+    const sideEffects = safeJsonArr(data.preview_sideEffects);
+    const confidence = String(data.preview_confidence ?? 'low');
+    return (
+      <View style={styles.richWrap}>
+        <View style={styles.richHeader}>
+          <Text style={styles.richLabel}>PREDICTION</Text>
+          <View style={[styles.riskBadge, { borderColor: riskColor(confidence === 'high' ? 'low' : confidence === 'medium' ? 'medium' : 'high') }]}>
+            <Text style={[styles.riskText, { color: colors.textPrimary }]}>CONFIDENCE: {confidence.toUpperCase()}</Text>
+          </View>
+        </View>
+        {!!data.preview_scenario && (
+          <Text style={[styles.richBody, { marginBottom: 8 }]}>{String(data.preview_scenario)}</Text>
+        )}
+        {ifApplied.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>IF APPLIED</Text>
+            {ifApplied.map((t, i) => (
+              <Text key={i} style={[styles.richBullet, { color: colors.accent }]}>✓ {t}</Text>
+            ))}
+          </>
+        )}
+        {ifNotApplied.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>IF NOT APPLIED</Text>
+            {ifNotApplied.map((t, i) => (
+              <Text key={i} style={styles.richBullet}>✗ {t}</Text>
+            ))}
+          </>
+        )}
+        {sideEffects.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>SIDE EFFECTS</Text>
+            {sideEffects.map((t, i) => (
+              <Text key={i} style={[styles.richBullet, { color: colors.warning }]}>! {t}</Text>
+            ))}
+          </>
+        )}
+        {!!data.preview_recommendation && (
+          <>
+            <Text style={styles.richSubLabel}>GO / NO-GO</Text>
+            <Text style={[styles.richBody, { color: colors.cyan }]}>{String(data.preview_recommendation)}</Text>
+          </>
+        )}
+      </View>
+    );
+  }
+
+  if (phase === 'export') {
+    const contents = String(data.artifact_contents ?? '');
+    const deps = safeJsonArr(data.artifact_dependencies);
+    const risk = String(data.artifact_risk ?? 'low');
+    return (
+      <View style={styles.richWrap}>
+        <View style={styles.richHeader}>
+          <Text style={styles.richLabel}>ARTIFACT</Text>
+          <View style={[styles.riskBadge, { borderColor: riskColor(risk) }]}>
+            <Text style={[styles.riskText, { color: riskColor(risk) }]}>{risk.toUpperCase()}</Text>
+          </View>
+        </View>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>NAME</Text>
+          <Text style={styles.kvVal}>{String(data.artifact_name ?? '')}</Text>
+        </View>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>TYPE</Text>
+          <Text style={styles.kvVal}>{String(data.artifact_type ?? '')}</Text>
+        </View>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>SIZE</Text>
+          <Text style={styles.kvVal}>{String(data.artifact_sizeBytes ?? 0)} B</Text>
+        </View>
+        {!!data.artifact_checksum && (
+          <View style={styles.kvRow}>
+            <Text style={styles.kvKey}>SHA256</Text>
+            <Text style={styles.kvVal} numberOfLines={1}>{String(data.artifact_checksum)}</Text>
+          </View>
+        )}
+
+        {contents.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>CONTENTS</Text>
+            <View style={styles.codeBlock}>
+              <ScrollView style={{ maxHeight: 260 }} nestedScrollEnabled>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <Text style={styles.codeText} selectable>{contents}</Text>
+                </ScrollView>
+              </ScrollView>
+            </View>
+          </>
+        )}
+
+        {deps.length > 0 && (
+          <>
+            <Text style={styles.richSubLabel}>DEPENDENCIES</Text>
+            {deps.map((d, i) => (
+              <Text key={i} style={styles.richBullet}>• {d}</Text>
+            ))}
+          </>
+        )}
+        {!!data.artifact_install && (
+          <>
+            <Text style={styles.richSubLabel}>INSTALL</Text>
+            <Text style={styles.richBody}>{String(data.artifact_install)}</Text>
+          </>
+        )}
+        {!!data.artifact_verification && (
+          <>
+            <Text style={styles.richSubLabel}>VERIFY</Text>
+            <Text style={styles.richBody}>{String(data.artifact_verification)}</Text>
+          </>
+        )}
+      </View>
+    );
+  }
+
+  // investigate / build — just show raw data
+  return (
+    <View style={styles.richWrap}>
+      {Object.entries(data).map(([k, v]) => (
+        <View key={k} style={styles.kvRow}>
+          <Text style={styles.kvKey}>{k}</Text>
+          <Text style={styles.kvVal} numberOfLines={3}>{String(v)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+
 function levelColor(level: string): string {
   switch (level) {
     case 'error': return colors.danger;
@@ -687,6 +973,103 @@ function levelColor(level: string): string {
 }
 
 const styles = StyleSheet.create({
+  featureRowWrap: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  richWrap: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    paddingTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  richHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  richLabel: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 10,
+    color: colors.textTertiary,
+    letterSpacing: 1.2,
+  },
+  riskBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  riskText: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 9,
+    letterSpacing: 1,
+  },
+  richBody: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 6,
+  },
+  richSubLabel: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 9,
+    color: colors.textTertiary,
+    letterSpacing: 1.2,
+    marginTop: spacing.sm,
+    marginBottom: 4,
+  },
+  richBullet: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    color: colors.textSecondary,
+    lineHeight: 16,
+    marginBottom: 3,
+  },
+  richMono: {
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 11,
+    color: colors.textPrimary,
+    lineHeight: 16,
+  },
+  kvRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingVertical: 3,
+  },
+  kvKey: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 9,
+    color: colors.textTertiary,
+    letterSpacing: 1,
+    minWidth: 70,
+  },
+  kvVal: {
+    flex: 1,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10,
+    color: colors.textPrimary,
+    textAlign: 'right',
+  },
+  codeBlock: {
+    backgroundColor: colors.pureBlack,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
+    marginTop: 4,
+  },
+  codeText: {
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10,
+    color: colors.textPrimary,
+    lineHeight: 14,
+  },
   pathHelp: {
     fontFamily: 'Inter-Regular',
     fontSize: 12,

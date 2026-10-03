@@ -148,60 +148,6 @@ const FEATURE_LABELS: Record<string, string> = {
   'policy-orchestration': 'Policy & Orchestration',
 };
 
-export const featureApi = {
-  checkAll: async (apkPath: string): Promise<FeatureCheckResponse> => {
-    const r = await factoryExec.run('node', [DEEP_SCAN_SCRIPT, apkPath], { timeoutMs: 180_000 });
-    if (r.result.exitCode !== 0) throw new Error(r.result.stderr || `deep-scan exit ${r.result.exitCode}`);
-    let parsed: any;
-    try { parsed = JSON.parse(r.result.stdout); }
-    catch { throw new Error('deep-scan non-JSON: ' + r.result.stdout.slice(0, 200)); }
-    if (!parsed.ok) throw new Error(parsed.error || 'deep-scan failed');
-
-    const features: Record<string, FeatureCheckResult> = {};
-    const allIds = new Set([...Object.keys(parsed.features), ...RUNTIME_ONLY]);
-
-    for (const id of allIds) {
-      const label = FEATURE_LABELS[id] || id;
-      if (RUNTIME_ONLY.has(id) && (!parsed.features[id] || parsed.features[id].totalHits === 0)) {
-        features[id] = {
-          id, status: 'runtime',
-          message: 'Runtime behavior — no static signature in the APK',
-          totalHits: 0, dexCount: 0, patterns: [], hits: [],
-        };
-        continue;
-      }
-      const r2 = parsed.features[id];
-      if (!r2 || r2.totalHits === 0) {
-        features[id] = {
-          id, status: 'clean',
-          message: 'No signatures found in scanned DEX',
-          totalHits: 0, dexCount: 0, patterns: [], hits: [],
-        };
-        continue;
-      }
-      features[id] = {
-        id, status: 'ok',
-        message: `${r2.totalHits} DEX file${r2.totalHits === 1 ? '' : 's'} · ${r2.patterns.length} pattern${r2.patterns.length === 1 ? '' : 's'}`,
-        totalHits: r2.totalHits,
-        dexCount: r2.dexCount,
-        patterns: r2.patterns,
-        hits: r2.hits,
-      };
-    }
-
-    return {
-      ok: true,
-      apk: parsed.apk,
-      apkSize: parsed.apkSize,
-      dexTotal: parsed.dexTotal,
-      dexParsed: parsed.dexParsed,
-      totalClasses: parsed.totalClasses,
-      elapsedMs: parsed.elapsedMs,
-      features,
-    };
-  },
-};
-
 // ── Patch plan (unchanged) ────────────────────────────────────────
 export type PatchGoal = 'report' | 'root-bypass' | 'sig-bypass' | 'remove-feature';
 export interface PatchFinding { id: string; target: string; evidence: string; risk: 'low'|'medium'|'high'; defeat: string; }
@@ -301,3 +247,252 @@ export const chatApi = {
     return r.response.data.content;
   },
 };
+
+// ── Per-feature DeepSeek analysis ────────────────────────────────
+const FEATURE_ANALYZE_SCRIPT = `${SOVEREIGN_HOME}/feature-analyze.cjs`;
+const TMP_DIR = '/data/data/com.termux/files/home/sovereign-factory/tmp';
+
+export interface FeatureInsight {
+  purpose: string;
+  howItWorks: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  riskReason: string;
+  technical: string[];
+  recommendation: string;
+  patchHint: string;
+}
+
+export interface FeatureAnalyzeInput {
+  apkName: string;
+  apkSize: number;
+  apkHash: string;
+  featureId: string;
+  featureLabel: string;
+  message: string;
+  totalHits: number;
+  patterns: string[];
+  topDex: string[];
+  topClasses: string[];
+}
+
+async function writeTmpFile(name: string, content: string): Promise<string> {
+  const fullPath = `${TMP_DIR}/${name}`;
+  const res = await fetch(`${FACTORY_BASE}/file/write`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: fullPath, content }),
+  });
+  if (!res.ok) throw new Error(`file/write HTTP ${res.status}`);
+  return fullPath;
+}
+
+async function deleteTmpFile(fullPath: string): Promise<void> {
+  try {
+    await factoryExec.run('rm', ['-f', fullPath], { timeoutMs: 3000 });
+  } catch {
+    // best-effort
+  }
+}
+
+interface FeatureApiShape {
+  checkAll: (apkPath: string) => Promise<FeatureCheckResponse>;
+  analyzeOne: (input: FeatureAnalyzeInput) => Promise<FeatureInsight>;
+}
+
+const featureApiImpl: FeatureApiShape = {
+  checkAll: async (apkPath: string): Promise<FeatureCheckResponse> => {
+    const r = await factoryExec.run('node', [DEEP_SCAN_SCRIPT, apkPath], { timeoutMs: 180_000 });
+    if (r.result.exitCode !== 0) throw new Error(r.result.stderr || `deep-scan exit ${r.result.exitCode}`);
+    let parsed: any;
+    try { parsed = JSON.parse(r.result.stdout); }
+    catch { throw new Error('deep-scan non-JSON: ' + r.result.stdout.slice(0, 200)); }
+    if (!parsed.ok) throw new Error(parsed.error || 'deep-scan failed');
+
+    const features: Record<string, FeatureCheckResult> = {};
+    const allIds = new Set([...Object.keys(parsed.features), ...RUNTIME_ONLY]);
+    for (const id of allIds) {
+      if (RUNTIME_ONLY.has(id) && (!parsed.features[id] || parsed.features[id].totalHits === 0)) {
+        features[id] = { id, status: 'runtime', message: 'Runtime behavior — no static signature in the APK', totalHits: 0, dexCount: 0, patterns: [], hits: [] };
+        continue;
+      }
+      const r2 = parsed.features[id];
+      if (!r2 || r2.totalHits === 0) {
+        features[id] = { id, status: 'clean', message: 'No signatures found in scanned DEX', totalHits: 0, dexCount: 0, patterns: [], hits: [] };
+        continue;
+      }
+      features[id] = {
+        id, status: 'ok',
+        message: `${r2.totalHits} DEX file${r2.totalHits === 1 ? '' : 's'} · ${r2.patterns.length} pattern${r2.patterns.length === 1 ? '' : 's'}`,
+        totalHits: r2.totalHits, dexCount: r2.dexCount,
+        patterns: r2.patterns, hits: r2.hits,
+      };
+    }
+    return {
+      ok: true, apk: parsed.apk, apkSize: parsed.apkSize,
+      dexTotal: parsed.dexTotal, dexParsed: parsed.dexParsed,
+      totalClasses: parsed.totalClasses, elapsedMs: parsed.elapsedMs, features,
+    };
+  },
+  analyzeOne: async (input: FeatureAnalyzeInput): Promise<FeatureInsight> => {
+    const name = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const filePath = await writeTmpFile(name, JSON.stringify(input));
+    try {
+      const r = await factoryExec.run('node', [FEATURE_ANALYZE_SCRIPT, filePath], {
+        timeoutMs: 180_000,
+      });
+      if (r.result.exitCode !== 0) {
+        throw new Error(r.result.stderr || `analyze exit ${r.result.exitCode}`);
+      }
+      let parsed: any;
+      try { parsed = JSON.parse(r.result.stdout); }
+      catch { throw new Error('analyze non-JSON: ' + r.result.stdout.slice(0, 200)); }
+      if (!parsed.ok) throw new Error(parsed.error || 'analyze failed');
+      return parsed.insight as FeatureInsight;
+    } finally {
+      void deleteTmpFile(filePath);
+    }
+  },
+};
+
+export const featureApi: FeatureApiShape = featureApiImpl;
+
+// ── Per-feature patch generation (Edit phase) ────────────────────
+const FEATURE_EDIT_SCRIPT = `${SOVEREIGN_HOME}/feature-edit.cjs`;
+
+export type EditApproach =
+  | 'frida-hook' | 'smali-edit' | 'manifest-edit'
+  | 'native-patch' | 'config-edit' | 'no-action';
+
+export interface FeatureEdit {
+  approach: EditApproach;
+  target: string;
+  method: string;
+  language: 'javascript' | 'smali' | 'xml' | 'json' | 'text';
+  payload: string;
+  before: string;
+  after: string;
+  impact: string;
+  verification: string;
+  risk: 'low' | 'medium' | 'high' | 'critical';
+}
+
+export interface FeatureEditInput {
+  apkName: string;
+  featureId: string;
+  featureLabel: string;
+  message: string;
+  patterns: string[];
+  topClasses: string[];
+  insight: FeatureInsight | null;
+}
+
+interface FeatureApiShapeV2 extends FeatureApiShape {
+  editOne: (input: FeatureEditInput) => Promise<FeatureEdit>;
+}
+
+Object.assign(featureApiImpl, {
+  editOne: async (input: FeatureEditInput): Promise<FeatureEdit> => {
+    const name = `edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const filePath = await writeTmpFile(name, JSON.stringify(input));
+    try {
+      const r = await factoryExec.run('node', [FEATURE_EDIT_SCRIPT, filePath], {
+        timeoutMs: 180_000,
+      });
+      if (r.result.exitCode !== 0) {
+        throw new Error(r.result.stderr || `edit exit ${r.result.exitCode}`);
+      }
+      let parsed: any;
+      try { parsed = JSON.parse(r.result.stdout); }
+      catch { throw new Error('edit non-JSON: ' + r.result.stdout.slice(0, 200)); }
+      if (!parsed.ok) throw new Error(parsed.error || 'edit failed');
+      return parsed.edit as FeatureEdit;
+    } finally {
+      void deleteTmpFile(filePath);
+    }
+  },
+});
+
+// Re-export with the extended shape
+export const featureApiExtended = featureApiImpl as unknown as FeatureApiShapeV2;
+
+// ── Per-feature preview generation (Preview phase) ───────────────
+const FEATURE_PREVIEW_SCRIPT = `${SOVEREIGN_HOME}/feature-preview.cjs`;
+
+export interface FeaturePreview {
+  scenario: string;
+  ifApplied: string[];
+  ifNotApplied: string[];
+  sideEffects: string[];
+  confidence: 'low' | 'medium' | 'high';
+  recommendation: string;
+}
+
+export interface FeaturePreviewInput {
+  apkName: string;
+  featureId: string;
+  featureLabel: string;
+  insight: FeatureInsight | null;
+  edit: FeatureEdit | null;
+}
+
+// ── Per-feature artifact generation (Export phase) ───────────────
+const FEATURE_EXPORT_SCRIPT = `${SOVEREIGN_HOME}/feature-export.cjs`;
+
+export interface FeatureArtifact {
+  name: string;
+  type: 'frida-script' | 'smali-diff' | 'manifest-fragment' | 'native-patch' | 'report' | 'json-manifest';
+  contents: string;
+  installInstructions: string;
+  verification: string;
+  dependencies: string[];
+  risk: 'low' | 'medium' | 'high' | 'critical';
+  sizeBytes?: number;
+  checksum?: string;
+}
+
+export interface FeatureArtifactInput {
+  apkName: string;
+  featureId: string;
+  featureLabel: string;
+  insight: FeatureInsight | null;
+  edit: FeatureEdit | null;
+  preview: FeaturePreview | null;
+}
+
+interface FeatureApiShapeV3 extends FeatureApiShapeV2 {
+  previewOne: (input: FeaturePreviewInput) => Promise<FeaturePreview>;
+  exportOne: (input: FeatureArtifactInput) => Promise<FeatureArtifact>;
+}
+
+Object.assign(featureApiImpl, {
+  previewOne: async (input: FeaturePreviewInput): Promise<FeaturePreview> => {
+    const name = `prev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const filePath = await writeTmpFile(name, JSON.stringify(input));
+    try {
+      const r = await factoryExec.run('node', [FEATURE_PREVIEW_SCRIPT, filePath], { timeoutMs: 180_000 });
+      if (r.result.exitCode !== 0) throw new Error(r.result.stderr || `preview exit ${r.result.exitCode}`);
+      let parsed: any;
+      try { parsed = JSON.parse(r.result.stdout); } catch { throw new Error('preview non-JSON'); }
+      if (!parsed.ok) throw new Error(parsed.error || 'preview failed');
+      return parsed.preview as FeaturePreview;
+    } finally {
+      void deleteTmpFile(filePath);
+    }
+  },
+  exportOne: async (input: FeatureArtifactInput): Promise<FeatureArtifact> => {
+    const name = `exp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const filePath = await writeTmpFile(name, JSON.stringify(input));
+    try {
+      const r = await factoryExec.run('node', [FEATURE_EXPORT_SCRIPT, filePath], { timeoutMs: 180_000 });
+      if (r.result.exitCode !== 0) throw new Error(r.result.stderr || `export exit ${r.result.exitCode}`);
+      let parsed: any;
+      try { parsed = JSON.parse(r.result.stdout); } catch { throw new Error('export non-JSON'); }
+      if (!parsed.ok) throw new Error(parsed.error || 'export failed');
+      return parsed.artifact as FeatureArtifact;
+    } finally {
+      void deleteTmpFile(filePath);
+    }
+  },
+});
+
+export const featureApiFull = featureApiImpl as unknown as FeatureApiShapeV3;
