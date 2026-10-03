@@ -69,27 +69,31 @@ function fmtTime(ts: number): string {
 
 export default function MonitorTab() {
   const [rows, setRows] = useState<UnifiedRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [auto, setAuto] = useState(true);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refreshSilent = useCallback(async () => {
     try {
       const r = await loadRows(200);
       setRows(r);
     } catch {
       setRows([]);
     }
-    setLoading(false);
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refreshManual = useCallback(async () => {
+    setRefreshing(true);
+    await refreshSilent();
+    setRefreshing(false);
+  }, [refreshSilent]);
+
+  useEffect(() => { void refreshSilent(); }, [refreshSilent]);
 
   useEffect(() => {
     if (!auto) return;
-    const t = setInterval(() => { void refresh(); }, 1500);
+    const t = setInterval(() => { void refreshSilent(); }, 1500);
     return () => clearInterval(t);
-  }, [auto, refresh]);
+  }, [auto, refreshSilent]);
 
   return (
     <View style={styles.container}>
@@ -104,7 +108,7 @@ export default function MonitorTab() {
               {auto ? 'LIVE' : 'PAUSED'}
             </Text>
           </Pressable>
-          <Pressable onPress={refresh} style={styles.pill}>
+          <Pressable onPress={refreshManual} style={styles.pill}>
             <Text style={styles.pillText}>REFRESH</Text>
           </Pressable>
         </View>
@@ -115,9 +119,9 @@ export default function MonitorTab() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshManual} tintColor={colors.accent} />}
       >
-        {rows.length === 0 && !loading && (
+        {rows.length === 0 && !refreshing && (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>NO EVENTS YET</Text>
             <Text style={styles.emptySub}>

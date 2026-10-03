@@ -83,7 +83,7 @@ function ago(ts: number | null): string {
 
 export default function SystemTab() {
   const [s, setS] = useState<SysStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [partitionBusy, setPartitionBusy] = useState(false);
@@ -141,17 +141,21 @@ export default function SystemTab() {
     setTestBusy(false);
   }, []);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refreshSilent = useCallback(async () => {
     try { setS(await load()); } catch { setS(null); }
-    setLoading(false);
   }, []);
 
+  const refreshManual = useCallback(async () => {
+    setRefreshing(true);
+    await refreshSilent();
+    setRefreshing(false);
+  }, [refreshSilent]);
+
   useEffect(() => {
-    void refresh();
-    const t = setInterval(() => { void refresh(); }, 3000);
+    void refreshSilent();
+    const t = setInterval(() => { void refreshSilent(); }, 3000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refreshSilent]);
 
   return (
     <View style={styles.container}>
@@ -160,7 +164,7 @@ export default function SystemTab() {
       </View>
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshManual} tintColor={colors.accent} />}
       >
         <View style={styles.block}>
           <Text style={styles.blockLabel}>BACKEND</Text>

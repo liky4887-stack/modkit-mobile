@@ -32,28 +32,31 @@ function fmtAgo(ts: number | null): string {
 
 export default function ChatsTab() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [turns, setTurns] = useState<TurnRecord[]>([]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refreshSilent = useCallback(async () => {
     try {
       const s = await chatLifecycle.snapshot();
       setSnap(s);
     } catch {
       setSnap(null);
     }
-    setLoading(false);
   }, []);
 
+  const refreshManual = useCallback(async () => {
+    setRefreshing(true);
+    await refreshSilent();
+    setRefreshing(false);
+  }, [refreshSilent]);
+
   useEffect(() => {
-    // Abort stuck chats on mount (idempotent)
     void chatLifecycle.sweepStuck().catch(() => {});
-    void refresh();
-    const t = setInterval(() => { void refresh(); }, 2000);
+    void refreshSilent();
+    const t = setInterval(() => { void refreshSilent(); }, 2000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refreshSilent]);
 
   const viewTurns = async (chatId: string) => {
     if (expanded === chatId) { setExpanded(null); setTurns([]); return; }
@@ -64,7 +67,7 @@ export default function ChatsTab() {
 
   const closeChat = async (chatId: string) => {
     await chatRegistry.abort(chatId, 'user_cancelled');
-    void refresh();
+    void refreshSilent();
   };
 
   return (
@@ -76,7 +79,7 @@ export default function ChatsTab() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshManual} tintColor={colors.accent} />}
       >
         {snap && (
           <>
