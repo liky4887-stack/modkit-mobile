@@ -1,49 +1,155 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, RefreshControl,
+} from 'react-native';
+import * as SQLite from 'expo-sqlite';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 
-export default function SystemTab() {
-  const [health, setHealth] = useState<string>('checking…');
+interface SysStats {
+  backendOk: boolean;
+  bearerValid: boolean;
+  cookiesLen: number;
+  jobsTotal: number;
+  jobsRunning: number;
+  jobsDone: number;
+  eventsTotal: number;
+  httpTotal: number;
+  metricsTotal: number;
+  lastEventTs: number | null;
+  lastHttpTs: number | null;
+  dbUserVersion: number;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('http://127.0.0.1:8790/deepseek/health');
-        const json = await res.json();
-        if (cancelled) return;
-        const ok = json?.ok === true;
-        const bearer = json?.status?.bearerValid === true;
-        setHealth((ok ? 'BACKEND OK' : 'BACKEND DOWN') + ' · bearer ' + (bearer ? 'VALID' : 'INVALID'));
-      } catch (e) {
-        if (!cancelled) setHealth('BACKEND UNREACHABLE');
-      }
-    })();
-    return () => { cancelled = true; };
+async function load(): Promise<SysStats> {
+  const db = await SQLite.openDatabaseAsync('modkit.db');
+
+  let backendOk = false;
+  let bearerValid = false;
+  let cookiesLen = 0;
+  try {
+    const res = await fetch('http://127.0.0.1:8790/deepseek/health');
+    const json: any = await res.json();
+    backendOk = json?.ok === true;
+    bearerValid = json?.status?.bearerValid === true;
+    cookiesLen = json?.status?.cookiesLength ?? 0;
+  } catch {}
+
+  const count = async (sql: string, args: any[] = []): Promise<number> => {
+    const r = await db.getFirstAsync<{ n: number }>(sql, args).catch(() => ({ n: 0 }));
+    return r?.n ?? 0;
+  };
+  const first = async (sql: string, args: any[] = []): Promise<any> => {
+    return await db.getFirstAsync<any>(sql, args).catch(() => null);
+  };
+
+  const jobsTotal = await count(`SELECT COUNT(*) AS n FROM pipeline_jobs`);
+  const jobsRunning = await count(`SELECT COUNT(*) AS n FROM pipeline_jobs WHERE state NOT IN ('done','failed','cancelled')`);
+  const jobsDone = await count(`SELECT COUNT(*) AS n FROM pipeline_jobs WHERE state = 'done'`);
+  const eventsTotal = await count(`SELECT COUNT(*) AS n FROM event_log`);
+  const httpTotal = await count(`SELECT COUNT(*) AS n FROM http_log`);
+  const metricsTotal = await count(`SELECT COUNT(*) AS n FROM metric_snapshots`);
+
+  const lastEvent = await first(`SELECT ts FROM event_log ORDER BY ts DESC LIMIT 1`);
+  const lastHttp = await first(`SELECT ts FROM http_log ORDER BY ts DESC LIMIT 1`);
+  const versionRow = await first(`PRAGMA user_version`);
+
+  return {
+    backendOk, bearerValid, cookiesLen,
+    jobsTotal, jobsRunning, jobsDone,
+    eventsTotal, httpTotal, metricsTotal,
+    lastEventTs: lastEvent?.ts ?? null,
+    lastHttpTs: lastHttp?.ts ?? null,
+    dbUserVersion: versionRow?.user_version ?? 0,
+  };
+}
+
+function ago(ts: number | null): string {
+  if (!ts) return 'never';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+export default function SystemTab() {
+  const [s, setS] = useState<SysStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try { setS(await load()); } catch { setS(null); }
+    setLoading(false);
   }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
         <Text style={styles.topBarTitle}>MODKIT · SYSTEM</Text>
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
+      >
         <View style={styles.block}>
           <Text style={styles.blockLabel}>BACKEND</Text>
           <Text style={styles.blockValue}>http://127.0.0.1:8790</Text>
-          <Text style={styles.blockMeta}>{health}</Text>
-        </View>
-        <View style={styles.block}>
-          <Text style={styles.blockLabel}>DATA</Text>
-          <Text style={styles.blockValue}>modkit.db · schema v8</Text>
-          <Text style={styles.blockMeta}>WAL enabled · foreign_keys ON</Text>
-        </View>
-        <View style={styles.block}>
-          <Text style={styles.blockLabel}>DIAGNOSTICS</Text>
+          <Text style={[styles.status, s?.backendOk ? styles.statusOk : styles.statusBad]}>
+            {s?.backendOk ? '● ONLINE' : '● OFFLINE'}
+          </Text>
           <Text style={styles.blockMeta}>
-            Full SYSTEM tab (budget, prompt versions, cleanup, diagnostics){'\n'}
-            wires in Session 12.
+            bearer {s?.bearerValid ? 'valid' : 'invalid'} · cookies {s?.cookiesLen ?? 0} B
+          </Text>
+        </View>
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>JOBS</Text>
+          <View style={styles.grid}>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.jobsTotal ?? 0}</Text>
+              <Text style={styles.gridLabel}>total</Text>
+            </View>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.jobsRunning ?? 0}</Text>
+              <Text style={styles.gridLabel}>running</Text>
+            </View>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.jobsDone ?? 0}</Text>
+              <Text style={styles.gridLabel}>done</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>MONITORING</Text>
+          <View style={styles.grid}>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.eventsTotal ?? 0}</Text>
+              <Text style={styles.gridLabel}>events</Text>
+            </View>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.httpTotal ?? 0}</Text>
+              <Text style={styles.gridLabel}>http</Text>
+            </View>
+            <View style={styles.gridCell}>
+              <Text style={styles.gridNum}>{s?.metricsTotal ?? 0}</Text>
+              <Text style={styles.gridLabel}>metrics</Text>
+            </View>
+          </View>
+          <Text style={styles.blockMeta}>
+            last event: {ago(s?.lastEventTs ?? null)} · last http: {ago(s?.lastHttpTs ?? null)}
+          </Text>
+        </View>
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>DATABASE</Text>
+          <Text style={styles.blockValue}>modkit.db</Text>
+          <Text style={styles.blockMeta}>
+            schema v{s?.dbUserVersion ?? '?'} · WAL · foreign_keys ON
           </Text>
         </View>
       </ScrollView>
@@ -79,7 +185,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     fontSize: 10,
     letterSpacing: 2,
-    marginBottom: 6,
+    marginBottom: 8,
   },
   blockValue: {
     color: colors.textPrimary,
@@ -92,5 +198,32 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Regular',
     fontSize: 10,
     lineHeight: 16,
+    marginTop: 6,
+  },
+  status: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    letterSpacing: 1,
+    marginTop: 4,
+  },
+  statusOk: { color: colors.accent },
+  statusBad: { color: colors.danger },
+  grid: {
+    flexDirection: 'row',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  gridCell: { flex: 1, alignItems: 'center' },
+  gridNum: {
+    color: colors.accent,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 20,
+  },
+  gridLabel: {
+    color: colors.textTertiary,
+    fontFamily: 'Inter-Regular',
+    fontSize: 9,
+    letterSpacing: 1,
+    marginTop: 2,
   },
 });

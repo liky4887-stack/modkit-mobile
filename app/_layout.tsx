@@ -13,6 +13,11 @@ import {
 } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
 import { colors } from '@/theme/colors';
+import { eventBus } from '@/orchestration/eventBus';
+import { httpLog } from '@/api/httpLog';
+import { startPersistingEvents } from '@/monitor/persistEvents';
+import { startPersistingHttp } from '@/monitor/persistHttp';
+import { startMetricsSampler } from '@/monitor/metricsSampler';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -31,6 +36,17 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
+
+  useEffect(() => {
+    // Boot monitoring. Idempotent — safe on hot reload.
+    try {
+      startPersistingEvents(eventBus as any);
+      startPersistingHttp(httpLog as any);
+      startMetricsSampler(null, 10000);
+    } catch {
+      // never block boot
+    }
+  }, []);
 
   if (!fontsLoaded && !fontError) {
     return null;
