@@ -17,6 +17,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { PHASES, PHASE_FEATURES } from '@/engine/phases';
 import { runPhase } from '@/engine/runner';
 import { featureMap } from '@/features/registry';
+import { runGhostSuiteAnalysis } from '@/engine/ghost-suite';
 import type { FeatureResult, HandlerContext, UploadedFile, WorkflowPhase } from '@/engine/types';
 
 type StepId = 'import' | WorkflowPhase;
@@ -163,6 +164,17 @@ export default function PatchScreen() {
       const nextId = ids[idx];
       setCurrentFeatureId(nextId ?? null);
     });
+
+    if (phase === 'analyze') {
+      try {
+        const ghost = await runGhostSuiteAnalysis(apk, obb, ctx.log);
+        ctx.log('info', 'Ghost summary: collision=' + ghost.summary.collisionRate +
+          ' FPs=' + ghost.summary.falsePositives +
+          ' blindspots=' + ghost.summary.blindSpots);
+      } catch (e) {
+        ctx.log('error', 'Ghost suite failed: ' + String(e));
+      }
+    }
 
     runningRef.current = false;
     setCurrentFeatureId(null);
