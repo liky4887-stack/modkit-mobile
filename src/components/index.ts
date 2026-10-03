@@ -16,3 +16,4 @@ export { FeatureListItem } from './FeatureListItem';
 export { WarningBanner } from './WarningBanner';
 export { EmptyState } from './EmptyState';
 export { SovereignLink } from './SovereignLink';
+export { BuildPanel } from './BuildPanel';

@@ -47,3 +47,9 @@ ios/Pods/
 ios/build/
 .env.production
 .env.staging
+
+# sovereign-factory backend
+server/node_modules/
+server/.env
+cookies/
+deepseek-creds.json

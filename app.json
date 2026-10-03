@@ -12,13 +12,18 @@
       "bundleIdentifier": "com.modkit.sandbox"
     },
     "android": {
-      "package": "com.modkit.sandbox"
+      "package": "com.modkit.sandbox",
+      "usesCleartextTraffic": true
     },
     "web": {
       "bundler": "metro",
       "output": "single"
     },
-    "plugins": ["expo-router", "expo-font", "expo-web-browser"],
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser"
+    ],
     "experiments": {
       "typedRoutes": true
     }

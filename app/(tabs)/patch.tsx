@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, SovereignLink } from '@/components';
+import { TopBar, Panel, SovereignLink, BuildPanel } from '@/components';
 import { useRouter } from 'expo-router';
 import {
   ChevronLeft, ChevronRight, Check, FileUp, Search, GitBranch,
@@ -216,8 +216,8 @@ export default function PatchScreen() {
     }
   };
 
-  const canContinue = !running && (step !== 0 || !!(apk || obb));
-  const bothReady = !!(apk && obb);
+  const canContinue = !running;
+  const bothReady = !!apk; // OBB optional — APK alone is enough
 
   return (
     <View style={styles.container}>
@@ -261,7 +261,7 @@ export default function PatchScreen() {
           />
         )}
 
-        {step > 0 && (
+        {step > 0 && step !== 5 && (
           <PhaseStep
             phase={currentStepId as WorkflowPhase}
             results={results[currentStepId] ?? []}
@@ -270,6 +270,8 @@ export default function PatchScreen() {
             logs={logs}
           />
         )}
+
+        {step === 5 && <BuildPanel />}
 
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
@@ -385,6 +387,19 @@ function ImportStep({
         formatSize={formatSize}
         hint="Tap to pick just the OBB"
       />
+
+      <View style={styles.obbHint}>
+        <Text style={styles.obbHintTitle}>OBB IS OPTIONAL</Text>
+        <Text style={styles.obbHintBody}>
+          If the OBB is packed inside your APK (common for modified builds), skip this
+          slot and just tap Next. The builder reads the APK end-to-end on the Termux
+          backend — no on-device scan, no size limit, works for multi-gigabyte APKs.
+        </Text>
+      </View>
+
+
+
+
 
       <View style={styles.sectionSpacing} />
 
@@ -595,6 +610,68 @@ function levelColor(level: string): string {
 }
 
 const styles = StyleSheet.create({
+  obbHint: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  obbHintTitle: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 10,
+    color: colors.cyan,
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  obbHintBody: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+  },
+  embeddedBanner: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.accentDim ?? 'rgba(0,255,136,0.35)',
+    backgroundColor: colors.accentGlow ?? 'rgba(0,255,136,0.10)',
+  },
+  embeddedTitle: {
+    fontFamily: 'JetBrainsMono-Bold',
+    fontSize: 11,
+    color: colors.accent,
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  embeddedBody: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 4,
+  },
+  embeddedEntry: {
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10,
+    color: colors.textTertiary,
+    lineHeight: 15,
+  },
+  embeddedWarn: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,184,0,0.35)',
+    backgroundColor: 'rgba(255,184,0,0.10)',
+  },
+  embeddedWarnText: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    color: colors.warning,
+  },
   container: { flex: 1, backgroundColor: colors.pureBlack },
   stepBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm + 2, paddingHorizontal: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
   stepItem: { flexDirection: 'row', alignItems: 'center' },
