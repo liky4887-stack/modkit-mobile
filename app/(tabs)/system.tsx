@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, RefreshControl,
+  View, Text, StyleSheet, ScrollView, RefreshControl, TextInput,
 } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { colors } from '@/theme/colors';
 import { Pressable } from 'react-native';
 import { deepseekClient } from '@/chat/deepseekClient';
+import { agentLoop } from '@/agent/agentLoop';
+import { toolsClient } from '@/api/toolsClient';
 import { chatRegistry } from '@/chat/chatRegistry';
 import { spacing } from '@/theme';
 
@@ -82,6 +84,33 @@ export default function SystemTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentQuery, setAgentQuery] = useState('Find all classes in com.pubg.krmobile that reference Sentry and decompile the one that looks like the analytics client.');
+  const [agentResult, setAgentResult] = useState<string | null>(null);
+  const [agentSteps, setAgentSteps] = useState<string[]>([]);
+
+  const runAgentTest = useCallback(async () => {
+    setAgentBusy(true);
+    setAgentResult(null);
+    setAgentSteps([]);
+    try {
+      const r = await agentLoop.run({
+        query: agentQuery,
+        apkHint: 'PUBG_MOBILE.apk (com.pubg.krmobile 4.6.0)',
+      });
+      setAgentSteps(r.steps.map((st, i) => {
+        if (st.kind === 'tool') return `#${i}  tool ${st.tool}  (${st.elapsedMs}ms, ${st.resultChars}B)`;
+        if (st.kind === 'final') return `#${i}  final`;
+        return `#${i}  parse_error`;
+      }));
+      setAgentResult(
+        `iterations=${r.iterations}  tools=${r.steps.filter(s => s.kind === 'tool').length}  ${r.totalMs}ms\n\n${r.final.slice(0, 1500)}`
+      );
+    } catch (e) {
+      setAgentResult('FAIL · ' + (e instanceof Error ? e.message : String(e)));
+    }
+    setAgentBusy(false);
+  }, [agentQuery]);
   const runDeepseekTest = useCallback(async () => {
     setTestBusy(true);
     setTestResult(null);
@@ -198,6 +227,41 @@ export default function SystemTab() {
         </View>
 
         <View style={styles.block}>
+          <Text style={styles.blockLabel}>AGENT TEST</Text>
+          <TextInput
+            value={agentQuery}
+            onChangeText={setAgentQuery}
+            style={styles.agentInput}
+            placeholder="Ask the agent to investigate something"
+            placeholderTextColor={colors.textTertiary}
+            multiline
+            numberOfLines={3}
+            editable={!agentBusy}
+          />
+          <Pressable
+            onPress={runAgentTest}
+            disabled={agentBusy}
+            style={[styles.testBtn, { marginTop: 8 }, agentBusy && { opacity: 0.5 }]}
+          >
+            <Text style={styles.testBtnText}>
+              {agentBusy ? 'AGENT RUNNING…' : 'RUN AGENT'}
+            </Text>
+          </Pressable>
+          {agentSteps.length > 0 && (
+            <View style={{ marginTop: 8 }}>
+              {agentSteps.map((line, i) => (
+                <Text key={i} style={styles.agentStep}>{line}</Text>
+              ))}
+            </View>
+          )}
+          {agentResult && (
+            <Text style={[styles.blockMeta, { marginTop: 8, color: agentResult.startsWith('FAIL') ? colors.danger : colors.accent }]}>
+              {agentResult}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.block}>
           <Text style={styles.blockLabel}>DATABASE</Text>
           <Text style={styles.blockValue}>modkit.db</Text>
           <Text style={styles.blockMeta}>
@@ -290,5 +354,23 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     fontSize: 11,
     letterSpacing: 1,
+  },
+  agentInput: {
+    color: colors.textPrimary,
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    backgroundColor: colors.pureBlack,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 8,
+    minHeight: 56,
+    textAlignVertical: 'top',
+  },
+  agentStep: {
+    color: colors.textTertiary,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10,
+    lineHeight: 14,
   },
 });
