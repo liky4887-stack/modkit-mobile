@@ -110,7 +110,11 @@ export default function SystemTab() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => { void refresh(); }, 3000);
+    return () => clearInterval(t);
+  }, [refresh]);
 
   return (
     <View style={styles.container}>

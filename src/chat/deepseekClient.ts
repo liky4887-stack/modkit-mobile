@@ -4,6 +4,7 @@
 import { chatRegistry, ChatRecord } from './chatRegistry';
 import { globalRateLimiter } from './rateLimiter';
 import { httpLog, preview } from '@/api/httpLog';
+import { eventBus } from '@/orchestration/eventBus';
 
 const BACKEND = 'http://127.0.0.1:8790';
 const CHAT_URL = BACKEND + '/deepseek/chat';
@@ -92,6 +93,20 @@ export const deepseekClient = {
       });
     }
 
+    eventBus.emit({
+      scanId: opts.jobId || 'chat',
+      correlationId: chat.id,
+      phase: (opts.phase as any) || 'analyze',
+      functionId: 'orchestration_logs',
+      severity: 'info',
+      payload: {
+        action: 'chat_send_start',
+        chatId: chat.id,
+        purpose: opts.purpose || null,
+        promptChars: prompt.length,
+      },
+    });
+
     // Record the user turn before sending so a crash still has the prompt
     await chatRegistry.appendTurn({
       chatId: chat.id,
@@ -179,6 +194,20 @@ export const deepseekClient = {
         }
 
         globalRateLimiter.release(limiterId, null);
+
+        eventBus.emit({
+          scanId: opts.jobId || 'chat',
+          correlationId: chat.id,
+          phase: (opts.phase as any) || 'analyze',
+          functionId: 'orchestration_logs',
+          severity: 'info',
+          payload: {
+            action: 'chat_send_ok',
+            chatId: chat.id,
+            elapsedMs,
+            contentChars: content.length,
+          },
+        });
 
         return {
           chatId: chat.id,
