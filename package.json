@@ -56,6 +56,7 @@
     "@babel/core": "^7.25.2",
     "@types/react": "~19.1.10",
     "@types/react-native": "^0.72.8",
+    "tsx": "^4.23.15",
     "typescript": "~5.9.2"
   }
 }

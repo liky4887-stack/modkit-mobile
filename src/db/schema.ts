@@ -1,7 +1,8 @@
+import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const DB_NAME = 'modkit.db';
 
 export interface ScanRecord {
@@ -234,4 +235,6 @@ export const MIGRATIONS: string[][] = [
     );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_finding_artifacts_unique ON finding_artifacts(scanId, featureId);`,
   ],
+  // v7 — orchestration graph
+  [MIGRATION_V7],
 ];
