@@ -22,6 +22,7 @@ import { persistScan, attachPlanToScan } from '@/hooks/useScanStore';
 import { fingerprintApk } from '@/db/scans';
 import { featureMap } from '@/features/registry';
 import { runGhostSuiteAnalysis } from '@/engine/ghost-suite';
+import { httpLog, preview } from '@/api/httpLog';
 import {
   runOrchestrationForPhase,
   startOrchestrationLogStream,
@@ -225,10 +226,51 @@ export default function PatchScreen() {
       }
     })();
 
+    // Mirror backend HTTP traffic into the log stream (once per session)
+    if (!(globalThis as any).__httpLogWired) {
+      (globalThis as any).__httpLogWired = true;
+      httpLog.subscribe((e) => {
+        const status = e.resStatus !== null ? String(e.resStatus) : 'ERR';
+        const shortUrl = e.url.replace(/^https?:\/\/[^/]+/, '');
+        const detail = e.error ? (' ' + e.error) : (' ' + e.resPreview.slice(0, 80));
+        setLogs((l) => [...l, {
+          level: e.resStatus !== null && e.resStatus < 400 && !e.error ? 'info' : 'warn',
+          msg: '[HTTP ' + status + '] ' + e.method + ' ' + shortUrl + ' (' + e.durationMs + 'ms)' + detail,
+          ts: e.ts,
+        }]);
+      });
+    }
+
     setRunning(false);
     setCurrentFeatureId(null);
     return phaseResults;
   }, [apkPath, currentScanId]);
+
+  const dumpHttpLog = async () => {
+    try {
+      const body = httpLog.dump();
+      const res = await fetch('http://127.0.0.1:8790/file/write', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: '/data/data/com.termux/files/home/sovereign-core-data/modkit-tmp/http-log.json',
+          content: body,
+        }),
+      });
+      const json = await res.json();
+      setLogs((l) => [...l, {
+        level: json.ok ? 'success' : 'warn',
+        msg: '[HTTP-DUMP] ' + (json.ok ? 'written to modkit-tmp/http-log.json (' + body.length + ' B)' : (json.error || 'failed')),
+        ts: Date.now(),
+      }]);
+    } catch (e) {
+      setLogs((l) => [...l, {
+        level: 'warn',
+        msg: '[HTTP-DUMP] ' + (e instanceof Error ? e.message : String(e)),
+        ts: Date.now(),
+      }]);
+    }
+  };
 
   const handleBack = () => {
     if (running) return;

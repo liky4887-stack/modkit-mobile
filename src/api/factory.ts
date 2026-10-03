@@ -12,23 +12,52 @@ export interface FactoryHealth {
     powWasmLoaded: boolean;
   };
 }
+import { httpLog, preview } from './httpLog';
+
 export interface BuildLogLine { level: 'info' | 'ok' | 'warn' | 'error'; msg: string; ts: number; }
 
 export const FACTORY_BASE =
   process.env.EXPO_PUBLIC_FACTORY_URL ?? 'http://127.0.0.1:8790';
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${FACTORY_BASE}${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-  });
-  const text = await res.text();
-  let json: any;
-  try { json = JSON.parse(text); } catch {
-    throw new Error(`non-JSON response (${res.status}): ${text.slice(0, 200)}`);
+  const method = (init?.method || 'GET').toUpperCase();
+  const url = `${FACTORY_BASE}${path}`;
+  const reqBody = typeof init?.body === 'string' ? init.body : '';
+  const t0 = Date.now();
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    });
+    const text = await res.text();
+    httpLog.record({
+      method,
+      url,
+      reqPreview: preview(reqBody),
+      resStatus: res.status,
+      resPreview: preview(text),
+      durationMs: Date.now() - t0,
+      error: null,
+    });
+    let json: any;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`non-JSON response (${res.status}): ${text.slice(0, 200)}`);
+    }
+    if (!res.ok || json.ok === false) throw new Error(json.error ?? `HTTP ${res.status}`);
+    return json as T;
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    httpLog.record({
+      method,
+      url,
+      reqPreview: preview(reqBody),
+      resStatus: null,
+      resPreview: '',
+      durationMs: Date.now() - t0,
+      error: err,
+    });
+    throw e;
   }
-  if (!res.ok || json.ok === false) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json as T;
 }
 
 export const factoryApi = {
