@@ -53,3 +53,14 @@ server/node_modules/
 server/.env
 cookies/
 deepseek-creds.json
+
+# sqlite local state (per-device)
+modkit.db
+modkit-v2.db
+modkit*.db-wal
+modkit*.db-shm
+modkit*.db-journal
+
+# local scratch
+*.tmp
+/tmp/
