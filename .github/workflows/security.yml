@@ -1,0 +1,17 @@
+name: Security
+on: [push, pull_request]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - name: Branding gate
+        run: |
+          if grep -riE "pubg|hwid|spoof|kernel-bridge|memory-injector|rootkit|polymorph|ban-wave|account-farm|zero-day|self-destruct|anti-cheat|evade" src/ app/ app.json; then
+            echo "::error::Offensive branding detected"
+            exit 1
+          fi
