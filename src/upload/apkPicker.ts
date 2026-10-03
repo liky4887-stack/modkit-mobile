@@ -18,9 +18,13 @@ export const apkPicker = {
   async pick(): Promise<PickedApk | null> {
     const t0 = Date.now();
 
+    // copyToCacheDirectory: true → Expo's native picker copies the file
+    // into app cache using the picker's URI permission grant (which our
+    // JS code does NOT get with copyToCacheDirectory:false). The returned
+    // asset.uri is then file://... so File.copy() succeeds.
     const result = await DocumentPicker.getDocumentAsync({
       type: 'application/vnd.android.package-archive',
-      copyToCacheDirectory: false,
+      copyToCacheDirectory: true,
       multiple: false,
     });
     if (result.canceled || !result.assets || result.assets.length === 0) return null;
