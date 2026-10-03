@@ -1,7 +1,10 @@
-// APK picker + streaming copy — Expo Go compatible.
-// Uses expo-file-system SDK 54 File/Directory classes.
+// APK picker + streaming copy.
+// Uses expo-file-system/legacy copyAsync because the modern File.copy()
+// rejects content:// URIs on Android (SDK 54, expo-file-system 19.0.24).
+// copyAsync routes through Android's ContentResolver and streams natively.
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Directory } from 'expo-file-system';
+import * as LegacyFS from 'expo-file-system/legacy';
 
 const STAGING_DIR = '/storage/emulated/0/Download/modkit-apks';
 
@@ -17,40 +20,38 @@ export const apkPicker = {
   async pick(): Promise<PickedApk | null> {
     const t0 = Date.now();
 
-    // copyToCacheDirectory: true → Expo copies the file to the app cache
-    // using a NATIVE stream (not JS memory), then returns a file:// URI.
-    // This is required because expo-file-system@19.0.24's File.copy()
-    // rejects content:// schemes ("URI is not absolute").
     const result = await DocumentPicker.getDocumentAsync({
       type: 'application/vnd.android.package-archive',
-      copyToCacheDirectory: true,
+      copyToCacheDirectory: false,
       multiple: false,
     });
     if (result.canceled || !result.assets || result.assets.length === 0) return null;
 
     const asset = result.assets[0];
+    console.log('[apkPicker] asset.uri =', asset.uri);
+
     const name = (asset.name || 'picked.apk').replace(/[^A-Za-z0-9._-]/g, '_');
     const stagedPath = STAGING_DIR + '/' + name;
+    const stagedFileUri = 'file://' + stagedPath;
 
     // Ensure staging dir exists (idempotent)
     const stagingDir = new Directory(STAGING_DIR);
     try { stagingDir.create({ idempotent: true, intermediates: true }); } catch { /* ok */ }
 
-    // Wrap source content:// URI in a File — new API handles it natively
-    const sourceFile = new File(asset.uri);
+    // Delete stale destination if present
+    try {
+      const destFile = new File(stagedPath);
+      if (destFile.exists) destFile.delete();
+    } catch { /* ok */ }
 
-    // Destination on shared storage
-    const destFile = new File(stagedPath);
-    try { if (destFile.exists) destFile.delete(); } catch { /* ok */ }
-
-    // Native copy. Note: File.copy returns void synchronously per SDK 54 .d.ts.
-    // For very large files this MAY block briefly — measured below.
-    const copyStart = Date.now();
-    sourceFile.copy(destFile);
-    const copyMs = Date.now() - copyStart;
+    // Legacy copyAsync handles content:// sources via ContentResolver
+    await LegacyFS.copyAsync({ from: asset.uri, to: stagedFileUri });
 
     let size = 0;
-    try { size = destFile.size; } catch { /* ok */ }
+    try {
+      const stat = await LegacyFS.getInfoAsync(stagedFileUri);
+      if (stat.exists && !stat.isDirectory) size = stat.size ?? 0;
+    } catch { /* ok */ }
 
     return {
       originalName: asset.name || 'picked.apk',
