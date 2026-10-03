@@ -1,18 +1,18 @@
 {
   "expo": {
-    "name": "pubg-hack",
-    "slug": "pubg-hack",
+    "name": "modkit-sandbox",
+    "slug": "modkit-sandbox",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "pubghack",
+    "scheme": "modkitsandbox",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.pubghack.tool"
+      "bundleIdentifier": "com.modkit.sandbox"
     },
     "android": {
-      "package": "com.pubghack.tool"
+      "package": "com.modkit.sandbox"
     },
     "web": {
       "bundler": "metro",

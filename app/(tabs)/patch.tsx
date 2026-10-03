@@ -135,9 +135,9 @@ export default function PatchScreen() {
   const runningRef = React.useRef(false);
 
   const runCurrentPhase = useCallback(async (phase: WorkflowPhase) => {
-    setRunning(true);
     if (runningRef.current) return;
     runningRef.current = true;
+    setRunning(true);
     setLogs([]);
     setResults((prev) => ({ ...prev, [phase]: [] }));
 

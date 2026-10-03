@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, Toggle, StatCard, CodeBlock, Slider, LogLine } from '@/components';
+import { TopBar, Panel, Toggle, StatCard, LogLine } from '@/components';
 import { FeatureIcon } from '@/components/FeatureIcon';
 import { getFeatureById } from '@/features/registry';
 import { useAppStore } from '@/store/useAppStore';
@@ -11,7 +11,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 export default function FeatureDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const feature = id ? getFeatureById(id) : undefined;
+  const safeId = typeof id === 'string' && /^[a-z0-9-]{1,64}$/.test(id) ? id : null;
+  const feature = safeId ? getFeatureById(safeId) : undefined;
   const { featureStates, toggleFeature, addLog, logs } = useAppStore();
 
   const [aggression, setAggression] = React.useState(0.5);
@@ -94,63 +95,7 @@ export default function FeatureDetailScreen() {
           )}
         </Panel>
 
-        {feature.id === 'behavioral-mimic' && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Behavior Parameters">
-              <Slider label="Aggression" value={aggression} min={0} max={1} onChange={setAggression} />
-              <Slider label="Reaction Time" value={reactionTime} min={100} max={800} step={10} onChange={setReactionTime} unit="ms" displayValue={reactionTime.toString()} />
-              <Slider label="Randomness" value={randomness} min={0} max={1} onChange={setRandomness} />
-              <Slider label="Session Length" value={sessionLength} min={15} max={300} step={5} onChange={setSessionLength} unit="min" displayValue={sessionLength.toString()} />
-            </Panel>
-          </View>
-        )}
-
-        {feature.id === 'kernel-bridge' && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Conceptual Architecture">
-              <CodeBlock
-                label="kernel_bridge (abstract)"
-                lines={[
-                  '// CONCEPTUAL INTERFACE ONLY',
-                  '// No real kernel code is executed',
-                  '',
-                  'interface KernelBridge {',
-                  '  hook_syscall(id: u64): Result',
-                  '  hide_process(pid: u32): void',
-                  '  cloak_memory(addr: ptr): void',
-                  '}',
-                ]}
-                highlightLines={[0, 1]}
-              />
-            </Panel>
-          </View>
-        )}
-
-        {feature.id === 'social-eng' && (
-          <View style={styles.sectionSpacing}>
-            <Panel title="Training Scenarios">
-              {[
-                { title: 'Phishing Awareness Drill', desc: 'Identify red flags in simulated phishing emails.', diff: 'Beginner' },
-                { title: 'Pretext Calling Scenario', desc: 'Understand trust-building via fabricated scenarios.', diff: 'Intermediate' },
-                { title: 'Baiting Attack Walkthrough', desc: 'Learn how curiosity-based attacks lure targets.', diff: 'Beginner' },
-              ].map((s, i) => (
-                <View key={i} style={styles.scenarioRow}>
-                  <View style={styles.scenarioInfo}>
-                    <Text style={styles.scenarioTitle}>{s.title}</Text>
-                    <Text style={styles.scenarioDesc}>{s.desc}</Text>
-                  </View>
-                  <View style={[styles.scenarioBadge, { backgroundColor: s.diff === 'Beginner' ? colors.accentGlow : colors.warningGlow }]}>
-                    <Text style={[styles.scenarioBadgeText, { color: s.diff === 'Beginner' ? colors.accent : colors.warning }]}>
-                      {s.diff.toUpperCase()}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </Panel>
-          </View>
-        )}
-
-        <View style={styles.sectionSpacing} />
+                                <View style={styles.sectionSpacing} />
         <Panel title="Module Info">
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>ID</Text>

@@ -20,7 +20,7 @@ export default function SettingsScreen() {
       <TopBar title="CONFIG" subtitle="system settings" statusColor={colors.accent} />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <WarningBanner
-          message="This app is a simulation and educational tool. All modules operate on mock data. No real exploits, kernel code, or anti-cheat bypass is performed."
+          message="This app is a simulation and educational tool. All modules operate on mock data. No real exploits, kernel code, or anti-tamper bypass is performed."
           type="educational"
         />
 
@@ -93,14 +93,14 @@ export default function SettingsScreen() {
               <ShieldAlert size={16} color={colors.accent} strokeWidth={2} />
               <View style={styles.aboutInfo}>
                 <Text style={styles.aboutTitle}>Safety Notice</Text>
-                <Text style={styles.aboutDesc}>All features are simulated or educational. No real binary modification, kernel access, or anti-cheat bypass is performed.</Text>
+                <Text style={styles.aboutDesc}>All features are simulated or educational. No real binary modification, kernel access, or anti-tamper bypass is performed.</Text>
               </View>
             </View>
             <View style={[styles.aboutRow, styles.aboutRowBorder]}>
               <FileText size={16} color={colors.cyan} strokeWidth={2} />
               <View style={styles.aboutInfo}>
                 <Text style={styles.aboutTitle}>Architecture</Text>
-                <Text style={styles.aboutDesc}>Clean architecture with Zustand state, mock data services, and typed interfaces for all 23 feature modules.</Text>
+                <Text style={styles.aboutDesc}>Clean architecture with Zustand state, mock data services, and typed interfaces for all 52 feature modules.</Text>
               </View>
             </View>
             <View style={[styles.aboutRow, styles.aboutRowBorder]}>

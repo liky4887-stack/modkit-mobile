@@ -33,3 +33,17 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# native build artifacts
+*.keystore
+*.cer
+*.der
+*.p7b
+google-services.json
+GoogleService-Info.plist
+android/.gradle/
+android/app/build/
+ios/Pods/
+ios/build/
+.env.production
+.env.staging
