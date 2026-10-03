@@ -53,7 +53,7 @@ export default function PatchScreen() {
   const [logs, setLogs] = useState<LogLine[]>([]);
 
   // ── Real backend state ──────────────────────────────────────────
-  const [apkPath, setApkPath] = useState('');
+  const [apkPath, setApkPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
   const [realLoading, setRealLoading] = useState(false);
   const [realError, setRealError] = useState<string | null>(null);
   const [currentScanId, setCurrentScanId] = useState<string | null>(null);
@@ -150,12 +150,23 @@ export default function PatchScreen() {
   const runningRef = React.useRef(false);
 
   const runCurrentPhase = useCallback(async (phase: WorkflowPhase) => {
+    setLogs((l) => [...l, { level: 'success', msg: '[BREADCRUMB] runCurrentPhase entered: ' + phase, ts: Date.now() }]);
     setRunning(true);
     setResults((prev) => ({ ...prev, [phase]: [] }));
 
     // Preload real feature data for this APK
     try {
-      await loadFeatureData(apkPath.trim());
+      clearFeatureCache();
+      const scanResp: any = await loadFeatureData(apkPath.trim());
+      const featureKeys = scanResp && scanResp.features ? Object.keys(scanResp.features).length : 0;
+      setLogs((l) => [...l, {
+        level: 'success',
+        msg: '[BACKEND] dexTotal=' + (scanResp?.dexTotal ?? '?')
+              + ' classes=' + (scanResp?.totalClasses ?? '?')
+              + ' features=' + featureKeys
+              + ' apk=' + (scanResp?.apk ?? '?'),
+        ts: Date.now(),
+      }]);
     } catch (e) {
       setLogs((l) => [...l, {
         level: 'error',
@@ -182,32 +193,37 @@ export default function PatchScreen() {
       setResults((prev) => ({ ...prev, [phase]: [...(prev[phase] ?? []), r] }));
     });
 
-    // Orchestration trainer — runs all 26 modules alongside the legacy runner.
-    // Failures here never break the UI.
-    try {
-      const scanIdForOrch = currentScanId ?? ('local-' + Date.now());
-      const bridgeCtx = {
-        scanId: scanIdForOrch,
-        apk: ctx.apk,
-        obb: ctx.obb,
-        log: ctx.log,
-      };
-      startOrchestrationLogStream(bridgeCtx);
-      const orchResult = await runOrchestrationForPhase(phase, bridgeCtx, {
-        scan: getLastResponse() as any,
-      });
-      setLogs((l) => [...l, {
-        level: orchResult.ok ? 'success' : 'warn',
-        msg: '[orch:' + phase + '] ' + orchResult.summary + ' in ' + orchResult.durationMs + 'ms',
-        ts: Date.now(),
-      }]);
-    } catch (e) {
-      setLogs((l) => [...l, {
-        level: 'warn',
-        msg: '[orch] ' + (e instanceof Error ? e.message : String(e)),
-        ts: Date.now(),
-      }]);
-    }
+    // Orchestration trainer — fire-and-forget so it can NEVER block the UI.
+    // Hard 90s timeout. Every path is logged.
+    const orchPhase = phase;
+    const orchApk = ctx.apk;
+    const orchObb = ctx.obb;
+    const orchScanId = currentScanId ?? ('local-' + Date.now());
+    const orchLog = ctx.log;
+    (async () => {
+      const t0 = Date.now();
+      setLogs((l) => [...l, { level: 'info', msg: '[orch] starting ' + orchPhase, ts: Date.now() }]);
+      try {
+        const bridgeCtx = { scanId: orchScanId, apk: orchApk, obb: orchObb, log: orchLog };
+        startOrchestrationLogStream(bridgeCtx);
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('orch timeout after 90s')), 90000));
+        const orchResult: any = await Promise.race([
+          runOrchestrationForPhase(orchPhase, bridgeCtx, { scan: getLastResponse() as any }),
+          timeout,
+        ]);
+        setLogs((l) => [...l, {
+          level: orchResult.ok ? 'success' : 'warn',
+          msg: '[orch:' + orchPhase + '] ' + orchResult.summary + ' in ' + (Date.now() - t0) + 'ms',
+          ts: Date.now(),
+        }]);
+      } catch (e) {
+        setLogs((l) => [...l, {
+          level: 'warn',
+          msg: '[orch] ' + orchPhase + ' FAILED after ' + (Date.now() - t0) + 'ms: ' + (e instanceof Error ? e.message : String(e)),
+          ts: Date.now(),
+        }]);
+      }
+    })();
 
     setRunning(false);
     setCurrentFeatureId(null);
