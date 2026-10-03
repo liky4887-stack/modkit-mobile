@@ -6,10 +6,6 @@ import * as SQLite from 'expo-sqlite';
 import { colors } from '@/theme/colors';
 import { Pressable } from 'react-native';
 import { deepseekClient } from '@/chat/deepseekClient';
-import { classLoader } from '@/classdata/classLoader';
-import { classCache } from '@/classdata/classCache';
-import { pipelineStore } from '@/pipeline/pipelineStore';
-import { partitionRunner } from '@/pipeline/partitionRunner';
 import { chatRegistry } from '@/chat/chatRegistry';
 import { spacing } from '@/theme';
 
@@ -86,40 +82,6 @@ export default function SystemTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [partitionBusy, setPartitionBusy] = useState(false);
-  const [partitionResult, setPartitionResult] = useState<string | null>(null);
-
-  const runPartitionTest = useCallback(async () => {
-    setPartitionBusy(true);
-    setPartitionResult(null);
-    try {
-      const APK = '/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk';
-      const scanId = 'part-' + Date.now();
-
-      setPartitionResult('1/4 dumping classes…');
-      const load = await classLoader.load(scanId, APK);
-
-      setPartitionResult('2/4 cache=' + load.totalClasses + ' classes. creating job…');
-      const job = await pipelineStore.createJob({
-        scanId,
-        apkPath: APK,
-        apkName: 'PUBG_MOBILE.apk',
-        apkSize: load.totalClasses > 0 ? 1500229644 : 0,
-      });
-      await pipelineStore.createPhasesForJob(job.id);
-      await pipelineStore.setJobState(job.id, 'partitioning');
-
-      setPartitionResult('3/4 calling DeepSeek partition…');
-      const part = await partitionRunner.run(job);
-
-      setPartitionResult('4/4 done · ' + part.unitCount + ' units in ' + part.elapsedMs + 'ms · chat=' + part.chatId.slice(0, 8));
-      await pipelineStore.setJobState(job.id, 'queued');
-    } catch (e) {
-      setPartitionResult('FAIL · ' + (e instanceof Error ? e.message : String(e)));
-    }
-    setPartitionBusy(false);
-  }, []);
-
   const runDeepseekTest = useCallback(async () => {
     setTestBusy(true);
     setTestResult(null);
@@ -233,20 +195,6 @@ export default function SystemTab() {
             </Text>
           )}
 
-          <Pressable
-            onPress={runPartitionTest}
-            disabled={partitionBusy}
-            style={[styles.testBtn, { marginTop: 12 }, partitionBusy && { opacity: 0.5 }]}
-          >
-            <Text style={styles.testBtnText}>
-              {partitionBusy ? 'RUNNING PIPELINE…' : 'TEST PARTITION (PUBG)'}
-            </Text>
-          </Pressable>
-          {partitionResult && (
-            <Text style={[styles.blockMeta, { marginTop: 8, color: partitionResult.startsWith('FAIL') ? colors.danger : colors.accent }]}>
-              {partitionResult}
-            </Text>
-          )}
         </View>
 
         <View style={styles.block}>

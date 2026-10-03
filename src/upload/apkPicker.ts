@@ -1,10 +1,8 @@
-// APK picker + streaming copy.
-// Uses expo-file-system/legacy copyAsync because the modern File.copy()
-// rejects content:// URIs on Android (SDK 54, expo-file-system 19.0.24).
-// copyAsync routes through Android's ContentResolver and streams natively.
+// APK picker + copy.
+// Root cause of prior failure: destination File needs file:// scheme.
+// Java's URI parser rejects bare paths with "URI is not absolute".
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Directory } from 'expo-file-system';
-import * as LegacyFS from 'expo-file-system/legacy';
 
 const STAGING_DIR = '/storage/emulated/0/Download/modkit-apks';
 
@@ -28,30 +26,30 @@ export const apkPicker = {
     if (result.canceled || !result.assets || result.assets.length === 0) return null;
 
     const asset = result.assets[0];
-    console.log('[apkPicker] asset.uri =', asset.uri);
+    console.log('[apkPicker] source uri =', asset.uri);
 
     const name = (asset.name || 'picked.apk').replace(/[^A-Za-z0-9._-]/g, '_');
     const stagedPath = STAGING_DIR + '/' + name;
-    const stagedFileUri = 'file://' + stagedPath;
 
-    // Ensure staging dir exists (idempotent)
+    // Ensure dir exists
     const stagingDir = new Directory(STAGING_DIR);
-    try { stagingDir.create({ idempotent: true, intermediates: true }); } catch { /* ok */ }
+    try { stagingDir.create({ idempotent: true, intermediates: true }); } catch {}
 
-    // Delete stale destination if present
-    try {
-      const destFile = new File(stagedPath);
-      if (destFile.exists) destFile.delete();
-    } catch { /* ok */ }
+    // Build the destination File from a proper file:// URI.
+    // This was the actual bug: bare path → Java "URI is not absolute".
+    const destUri = 'file://' + stagedPath;
+    console.log('[apkPicker] dest uri =', destUri);
 
-    // Legacy copyAsync handles content:// sources via ContentResolver
-    await LegacyFS.copyAsync({ from: asset.uri, to: stagedFileUri });
+    const sourceFile = new File(asset.uri);
+    const destFile = new File(destUri);
+
+    try { if (destFile.exists) destFile.delete(); } catch {}
+
+    // Now both sides have schemes: content:// (source) + file:// (dest)
+    sourceFile.copy(destFile);
 
     let size = 0;
-    try {
-      const stat = await LegacyFS.getInfoAsync(stagedFileUri);
-      if (stat.exists && !stat.isDirectory) size = stat.size ?? 0;
-    } catch { /* ok */ }
+    try { size = destFile.size; } catch {}
 
     return {
       originalName: asset.name || 'picked.apk',
@@ -64,14 +62,16 @@ export const apkPicker = {
 
   async list(): Promise<Array<{ path: string; size: number; name: string }>> {
     try {
-      const dir = new Directory(STAGING_DIR);
+      const dir = new Directory('file://' + STAGING_DIR);
       if (!dir.exists) return [];
       const entries = dir.list();
       const out: Array<{ path: string; size: number; name: string }> = [];
       for (const e of entries) {
         if (!(e instanceof File)) continue;
         if (!e.name.endsWith('.apk')) continue;
-        out.push({ path: e.uri, size: e.size ?? 0, name: e.name });
+        // Strip file:// for the caller so downstream APIs (backend path) match
+        const path = e.uri.startsWith('file://') ? e.uri.slice(7) : e.uri;
+        out.push({ path, size: e.size ?? 0, name: e.name });
       }
       out.sort((a, b) => b.size - a.size);
       return out;
@@ -81,6 +81,6 @@ export const apkPicker = {
   },
 
   async remove(stagedPath: string): Promise<void> {
-    try { new File(stagedPath).delete(); } catch {}
+    try { new File('file://' + stagedPath).delete(); } catch {}
   },
 };
