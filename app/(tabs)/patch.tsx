@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, SovereignLink, BuildPanel } from '@/components';
+import { TopBar, Panel, SovereignLink, PatchPlanPanel } from '@/components';
+import { factoryExec } from '@/api/factory';
 import { useRouter } from 'expo-router';
 import {
   ChevronLeft, ChevronRight, Check, FileUp, Search, GitBranch,
@@ -16,6 +17,7 @@ import * as DocumentPicker from 'expo-document-picker';
 
 import { PHASES, PHASE_FEATURES } from '@/engine/phases';
 import { runPhase } from '@/engine/runner';
+import { loadFeatureData, clearFeatureCache } from '@/engine/realFeatures';
 import { featureMap } from '@/features/registry';
 import { runGhostSuiteAnalysis } from '@/engine/ghost-suite';
 import type { FeatureResult, HandlerContext, UploadedFile, WorkflowPhase } from '@/engine/types';
@@ -43,6 +45,11 @@ export default function PatchScreen() {
   const [running, setRunning] = useState(false);
   const [currentFeatureId, setCurrentFeatureId] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
+
+  // ── Real backend state ──────────────────────────────────────────
+  const [apkPath, setApkPath] = useState('');
+  const [realLoading, setRealLoading] = useState(false);
+  const [realError, setRealError] = useState<string | null>(null);
 
   const currentStepId: StepId = STEPS[step].id;
 
@@ -136,50 +143,41 @@ export default function PatchScreen() {
   const runningRef = React.useRef(false);
 
   const runCurrentPhase = useCallback(async (phase: WorkflowPhase) => {
-    if (runningRef.current) return;
-    runningRef.current = true;
     setRunning(true);
-    setLogs([]);
     setResults((prev) => ({ ...prev, [phase]: [] }));
 
-    const ctx: HandlerContext = {
-      apk,
-      obb,
-      results: {},
-      log: (level, message) => {
-        setLogs((prev) => [{ level, msg: message, ts: Date.now() }, ...prev].slice(0, 300));
-      },
-    };
-
-    const ids = PHASE_FEATURES[phase] ?? [];
-    let idx = 0;
-
-    await runPhase(phase, ctx, (r) => {
-      setCurrentFeatureId(null);
-      setResults((prev) => ({
-        ...prev,
-        [phase]: [...(prev[phase] ?? []), r],
-      }));
-      idx += 1;
-      const nextId = ids[idx];
-      setCurrentFeatureId(nextId ?? null);
-    });
-
-    if (phase === 'analyze') {
-      try {
-        const ghost = await runGhostSuiteAnalysis(apk, obb, ctx.log);
-        ctx.log('info', 'Ghost summary: collision=' + ghost.summary.collisionRate +
-          ' FPs=' + ghost.summary.falsePositives +
-          ' blindspots=' + ghost.summary.blindSpots);
-      } catch (e) {
-        ctx.log('error', 'Ghost suite failed: ' + String(e));
-      }
+    // Preload real feature data for this APK
+    try {
+      await loadFeatureData(apkPath.trim());
+    } catch (e) {
+      setLogs((l) => [...l, {
+        level: 'error',
+        msg: 'feature preload failed: ' + (e instanceof Error ? e.message : String(e)),
+        ts: Date.now(),
+      }]);
     }
 
-    runningRef.current = false;
-    setCurrentFeatureId(null);
+    const ctx: HandlerContext = {
+      apk: apkPath.trim() ? {
+        name: apkPath.split('/').pop() || 'target.apk',
+        size: 0,
+        uri: apkPath.trim(),
+        mimeType: 'application/vnd.android.package-archive',
+      } : null,
+      obb: null,
+      results: {},
+      log: (level, msg) => setLogs((l) => [...l, { level, msg, ts: Date.now() }]),
+    };
+
+    const phaseResults = await runPhase(phase, ctx, (r) => {
+      setCurrentFeatureId(r.featureId);
+      setResults((prev) => ({ ...prev, [phase]: [...(prev[phase] ?? []), r] }));
+    });
+
     setRunning(false);
-  }, [apk, obb]);
+    setCurrentFeatureId(null);
+    return phaseResults;
+  }, [apkPath]);
 
   const handleBack = () => {
     if (running) return;
@@ -188,17 +186,30 @@ export default function PatchScreen() {
   };
 
   const handleNext = async () => {
-    if (running) return;
+    if (realLoading || running) return;
 
+    // Step 0 (import) → verify path → move to investigate and run it
     if (step === 0) {
-      if (!apk && !obb) {
-        Alert.alert('No files', 'Upload at least one file before continuing.');
+      const path = apkPath.trim();
+      if (!path) {
+        Alert.alert(
+          'No APK path',
+          'Enter the absolute path, e.g. /storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk',
+        );
         return;
       }
-      const firstPhase = PHASES[0].id;
-      setStep(1);
-      if (!results[firstPhase] || results[firstPhase].length === 0) {
-        await runCurrentPhase(firstPhase);
+      setRealError(null);
+      setRealLoading(true);
+      try {
+        const exists = await factoryExec.apkExists(path);
+        if (!exists) throw new Error(`File not found or unreadable: ${path}`);
+        clearFeatureCache();
+        setStep(1);
+        setRealLoading(false);
+        await runCurrentPhase('investigate');
+      } catch (e) {
+        setRealError(e instanceof Error ? e.message : String(e));
+        setRealLoading(false);
       }
       return;
     }
@@ -211,12 +222,10 @@ export default function PatchScreen() {
     const nextStep = step + 1;
     setStep(nextStep);
     const nextPhase = STEPS[nextStep].id as WorkflowPhase;
-    if (!results[nextPhase] || results[nextPhase].length === 0) {
-      await runCurrentPhase(nextPhase);
-    }
+    await runCurrentPhase(nextPhase);
   };
 
-  const canContinue = !running;
+  const canContinue = !running && !realLoading;
   const bothReady = !!apk; // OBB optional — APK alone is enough
 
   return (
@@ -249,16 +258,33 @@ export default function PatchScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {step === 0 && (
-          <ImportStep
-            apk={apk}
-            obb={obb}
-            bothReady={bothReady}
-            onPickBoth={pickBoth}
-            onReplace={pickOne}
-            onClear={clearFile}
-            onClearAll={clearAll}
-            formatSize={formatSize}
-          />
+          <View style={{ paddingHorizontal: spacing.md, marginTop: spacing.md }}>
+            <Panel title="APK PATH ON DEVICE">
+              <Text style={styles.pathHelp}>
+                Enter the absolute path. The Termux backend reads the file directly —
+                no upload, works for multi-gigabyte APKs.
+              </Text>
+              <TextInput
+                value={apkPath}
+                onChangeText={setApkPath}
+                placeholder="/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk"
+                placeholderTextColor={colors.textTertiary}
+                style={styles.pathInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!realLoading}
+              />
+            </Panel>
+            {realError && (
+              <View style={{ marginTop: spacing.sm }}>
+                <Panel title="ERROR">
+                  <Text style={{ fontFamily: 'Inter-Regular', fontSize: 12, color: colors.danger }}>
+                    {realError}
+                  </Text>
+                </Panel>
+              </View>
+            )}
+          </View>
         )}
 
         {step > 0 && step !== 5 && (
@@ -271,7 +297,19 @@ export default function PatchScreen() {
           />
         )}
 
-        {step === 5 && <BuildPanel />}
+        {step === 5 && (
+          <View>
+            <PhaseStep
+              phase={'build' as WorkflowPhase}
+              results={results['build'] ?? []}
+              running={running}
+              currentFeatureId={currentFeatureId}
+              logs={logs}
+            />
+            <View style={{ height: spacing.md }} />
+            <PatchPlanPanel apkPath={apkPath} />
+          </View>
+        )}
 
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
@@ -610,6 +648,24 @@ function levelColor(level: string): string {
 }
 
 const styles = StyleSheet.create({
+  pathHelp: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: spacing.sm,
+  },
+  pathInput: {
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 11,
+    color: colors.textPrimary,
+    backgroundColor: colors.pureBlack,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 10,
+  },
   obbHint: {
     marginTop: 12,
     padding: 12,
