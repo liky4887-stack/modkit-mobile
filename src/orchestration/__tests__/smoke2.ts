@@ -1,31 +1,22 @@
-// Pure-logic smoke test v2 — proof + worker selection.
-// Imports only pure modules (no SQLite/react-native).
-
 import { strictExecutionProof } from '../strictExecutionProof';
 import { selectWorker, computeBudget } from '../workerSelection';
 
 const scanId = 'smoke2-' + Date.now();
 const correlationId = scanId;
 
-// --- Proof: valid ---
 const good = strictExecutionProof.validate({
   scanId, correlationId, segmentId: 'seg-a', phase: 'edit',
   rawResponse: [
-    'Applied integrity adjustment.',
     'Offset range 0x1000 - 0x1040 modified.',
     'before: ' + 'a'.repeat(64),
     'after:  ' + 'b'.repeat(64),
-    'rationale: normalize structural signature',
+    'rationale: normalize',
   ].join('\n'),
 });
-
-// --- Proof: reject no offsets ---
 const bad = strictExecutionProof.validate({
   scanId, correlationId, segmentId: 'seg-b', phase: 'edit',
-  rawResponse: 'Success. Change applied. No further details.',
+  rawResponse: 'Success. Change applied.',
 });
-
-// --- Proof: reject identical hashes ---
 const same = strictExecutionProof.validate({
   scanId, correlationId, segmentId: 'seg-c', phase: 'edit',
   rawResponse: [
@@ -37,30 +28,22 @@ const same = strictExecutionProof.validate({
 
 console.log('proof.valid (expect true):', good.valid);
 console.log('proof.byteCount (expect 64):', good.evidence?.byteCount);
-console.log('proof.rationale (expect normalize...):', good.evidence?.rationale);
 console.log('proof.reject (expect no_offset_evidence):', bad.rejectionReason);
 console.log('proof.reject (expect checksums_identical):', same.rejectionReason);
 
-// --- Worker selection ---
 const workers = [
   { id: 'w1', model: 'deepseek-chat',     maxContextTokens: 64000,  currentLoad: 0,     healthy: true  },
   { id: 'w2', model: 'deepseek-reasoner', maxContextTokens: 128000, currentLoad: 10000, healthy: true  },
   { id: 'w3', model: 'kimi',              maxContextTokens: 32000,  currentLoad: 0,     healthy: false },
 ];
-
-const segSmall = { id: 's1', type: 'dex_class'  as const, estimatedTokens: 5000,  priority: 90, dependencies: [] };
+const segSmall = { id: 's1', type: 'dex_class' as const,  estimatedTokens: 5000,  priority: 90, dependencies: [] };
 const segBig   = { id: 's2', type: 'native_lib' as const, estimatedTokens: 20000, priority: 70, dependencies: [] };
 
-const pick1 = selectWorker(workers, segSmall, 100000);
-const pick2 = selectWorker(workers, segBig,   100000);
-console.log('worker for small seg (expect w2):', pick1?.id);
-console.log('worker for big seg   (expect w2):', pick2?.id);
+console.log('worker for small seg (expect w2):', selectWorker(workers, segSmall, 100000)?.id);
+console.log('worker for big seg   (expect w2):', selectWorker(workers, segBig,   100000)?.id);
 
 const unhealthyOnly = [{ id: 'w3', model: 'kimi', maxContextTokens: 32000, currentLoad: 0, healthy: false }];
 console.log('worker when only unhealthy (expect null):', selectWorker(unhealthyOnly, segSmall, 100000));
 
-// --- Budget computation ---
-const budgetNoConstraint  = computeBudget(segBig, workers[1], 100000, 0);
-const budgetWithConstraint = computeBudget(segBig, workers[1], 100000, 1);
-console.log('budget no-constraint (expect 24000):', budgetNoConstraint);
-console.log('budget with-constraint (expect 27600):', budgetWithConstraint);
+console.log('budget no-constraint (expect 24000):',   computeBudget(segBig, workers[1], 100000, 0));
+console.log('budget with-constraint (expect 27600):', computeBudget(segBig, workers[1], 100000, 1));

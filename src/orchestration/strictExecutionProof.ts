@@ -28,7 +28,7 @@ const HEX64 = /^[a-f0-9]{64}$/i;
 
 function extractOffsets(text: string): OffsetRange[] {
   const out: OffsetRange[] = [];
-  const re = /(?:offset|range|bytes?)[^\d]*(0x[0-9a-f]+|\d+)\s*(?:-|\.\.|to|–)\s*(0x[0-9a-f]+|\d+)/gi;
+  const re = /(?:offset|range|bytes?|modified|adjusted|altered|patched|applied)[^\d]*(0x[0-9a-f]+|\d+)\s*(?:-|\.\.|to|–)\s*(0x[0-9a-f]+|\d+)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const start = m[1].startsWith('0x') ? parseInt(m[1], 16) : parseInt(m[1], 10);
