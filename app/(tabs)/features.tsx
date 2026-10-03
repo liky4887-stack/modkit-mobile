@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, FeatureCard, SectionHeader, Chip } from '@/components';
+import { TopBar, FeatureCard, SectionHeader, Chip, SovereignLink } from '@/components';
 import { features } from '@/features/registry';
 import { useAppStore } from '@/store/useAppStore';
 import { useRouter } from 'expo-router';
@@ -37,6 +37,8 @@ export default function FeaturesScreen() {
   return (
     <View style={styles.container}>
       <TopBar title="MODULES" subtitle={`${features.length} features`} statusColor={colors.accent} />
+
+      <SovereignLink />
       <View style={styles.searchWrap}>
         <View style={styles.searchInput}>
           <Search size={16} color={colors.textTertiary} strokeWidth={2} />

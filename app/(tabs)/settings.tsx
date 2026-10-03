@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, Toggle, SectionHeader, WarningBanner, StatusBadge } from '@/components';
+import { TopBar, Panel, Toggle, SectionHeader, WarningBanner, StatusBadge, SovereignLink } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { features } from '@/features/registry';
 import { useRouter } from 'expo-router';
@@ -18,6 +18,8 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       <TopBar title="CONFIG" subtitle="system settings" statusColor={colors.accent} />
+
+      <SovereignLink />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <WarningBanner
           message="This app is a simulation and educational tool. All modules operate on mock data. No real exploits, kernel code, or anti-tamper bypass is performed."

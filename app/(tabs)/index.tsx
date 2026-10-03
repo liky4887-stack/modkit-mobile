@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel, StatCard, LogLine, RiskMeter, SectionHeader } from '@/components';
+import { TopBar, Panel, StatCard, LogLine, RiskMeter, SectionHeader, SovereignLink } from '@/components';
 import { useAppStore } from '@/store/useAppStore';
 import { features } from '@/features/registry';
 import { FeatureIcon } from '@/components/FeatureIcon';
@@ -38,6 +38,8 @@ export default function ConsoleScreen() {
         onRightPress={handleAddLog}
         statusColor={colors.accent}
       />
+
+      <SovereignLink />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.statsGrid}>
           <StatCard label="Active Modules" value={activeCount} unit={`/${features.length}`} color={colors.accent} trend="up" />

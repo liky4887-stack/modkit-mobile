@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel } from '@/components';
+import { TopBar, Panel, SovereignLink } from '@/components';
 import { useRouter } from 'expo-router';
 import {
   ChevronLeft, ChevronRight, Check, FileUp, Search, GitBranch,
@@ -228,6 +228,8 @@ export default function PatchScreen() {
         showBack
         statusColor={colors.accent}
       />
+
+      <SovereignLink />
 
       <View style={styles.stepBar}>
         {STEPS.map((s, i) => {

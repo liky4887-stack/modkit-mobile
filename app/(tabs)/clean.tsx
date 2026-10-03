@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing, radius } from '@/theme';
-import { TopBar, Panel } from '@/components';
+import { TopBar, Panel, SovereignLink } from '@/components';
 import { useRouter } from 'expo-router';
 import { ShieldCheck, Check, Package, Database, ChevronLeft } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -66,6 +66,8 @@ export default function CleanScreen() {
         showBack
         statusColor={colors.cyan}
       />
+
+      <SovereignLink />
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.section}>
