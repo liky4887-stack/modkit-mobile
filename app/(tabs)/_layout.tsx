@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import { colors } from '@/theme/colors';
-import { Terminal, Wrench, Layers, Settings } from 'lucide-react-native';
+import { Terminal, Wrench, Layers, Settings, BookOpen } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
 
 function makeTabIcon(Icon: LucideIcon) {
@@ -36,40 +36,12 @@ export default function TabLayout() {
         },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Console',
-          tabBarIcon: makeTabIcon(Terminal),
-        }}
-      />
-      <Tabs.Screen
-        name="patch"
-        options={{
-          title: 'Patch',
-          tabBarIcon: makeTabIcon(Wrench),
-        }}
-      />
-      <Tabs.Screen
-        name="features"
-        options={{
-          title: 'Modules',
-          tabBarIcon: makeTabIcon(Layers),
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Config',
-          tabBarIcon: makeTabIcon(Settings),
-        }}
-      />
-      <Tabs.Screen
-        name="clean"
-        options={{
-          href: null,
-        }}
-      />
+      <Tabs.Screen name="index" options={{ title: 'Console', tabBarIcon: makeTabIcon(Terminal) }} />
+      <Tabs.Screen name="patch" options={{ title: 'Patch', tabBarIcon: makeTabIcon(Wrench) }} />
+      <Tabs.Screen name="features" options={{ title: 'Modules', tabBarIcon: makeTabIcon(Layers) }} />
+      <Tabs.Screen name="sovereign-factory" options={{ title: 'Sovereign', tabBarIcon: makeTabIcon(BookOpen) }} />
+      <Tabs.Screen name="settings" options={{ title: 'Config', tabBarIcon: makeTabIcon(Settings) }} />
+      <Tabs.Screen name="clean" options={{ href: null }} />
     </Tabs>
   );
 }
