@@ -18,6 +18,7 @@ import { httpLog } from '@/api/httpLog';
 import { startPersistingEvents } from '@/monitor/persistEvents';
 import { startPersistingHttp } from '@/monitor/persistHttp';
 import { startMetricsSampler } from '@/monitor/metricsSampler';
+import { chatLifecycle } from '@/chat/chatLifecycle';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,6 +44,9 @@ export default function RootLayout() {
       startPersistingEvents(eventBus as any);
       startPersistingHttp(httpLog as any);
       startMetricsSampler(null, 10000);
+      // Sweep any chats left open by a previous crash, then every 2 minutes.
+      void chatLifecycle.sweepStuck().catch(() => {});
+      setInterval(() => { void chatLifecycle.sweepStuck().catch(() => {}); }, 120000);
     } catch {
       // never block boot
     }

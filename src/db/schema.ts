@@ -1,10 +1,11 @@
+import { MIGRATION_V10 } from './migrations/v10_chats';
 import { MIGRATION_V9 } from './migrations/v9_monitoring';
 import { MIGRATION_V8 } from './migrations/v8_pipeline';
 import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const DB_NAME = 'modkit.db';
 
 export interface ScanRecord {
@@ -243,4 +244,6 @@ export const MIGRATIONS: string[][] = [
   [MIGRATION_V8],
   // v9 — monitoring
   [MIGRATION_V9],
+  // v10 — chat architecture
+  [MIGRATION_V10],
 ];
