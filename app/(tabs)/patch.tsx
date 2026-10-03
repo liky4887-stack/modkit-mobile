@@ -22,6 +22,10 @@ import { persistScan, attachPlanToScan } from '@/hooks/useScanStore';
 import { fingerprintApk } from '@/db/scans';
 import { featureMap } from '@/features/registry';
 import { runGhostSuiteAnalysis } from '@/engine/ghost-suite';
+import {
+  runOrchestrationForPhase,
+  startOrchestrationLogStream,
+} from '@/engine/orchestrationBridge';
 import type { FeatureResult, HandlerContext, UploadedFile, WorkflowPhase } from '@/engine/types';
 
 type StepId = 'import' | WorkflowPhase;
@@ -177,6 +181,33 @@ export default function PatchScreen() {
       setCurrentFeatureId(r.featureId);
       setResults((prev) => ({ ...prev, [phase]: [...(prev[phase] ?? []), r] }));
     });
+
+    // Orchestration trainer — runs all 26 modules alongside the legacy runner.
+    // Failures here never break the UI.
+    try {
+      const scanIdForOrch = currentScanId ?? ('local-' + Date.now());
+      const bridgeCtx = {
+        scanId: scanIdForOrch,
+        apk: ctx.apk,
+        obb: ctx.obb,
+        log: ctx.log,
+      };
+      startOrchestrationLogStream(bridgeCtx);
+      const orchResult = await runOrchestrationForPhase(phase, bridgeCtx, {
+        scan: getLastResponse() as any,
+      });
+      setLogs((l) => [...l, {
+        level: orchResult.ok ? 'success' : 'warn',
+        msg: '[orch:' + phase + '] ' + orchResult.summary + ' in ' + orchResult.durationMs + 'ms',
+        ts: Date.now(),
+      }]);
+    } catch (e) {
+      setLogs((l) => [...l, {
+        level: 'warn',
+        msg: '[orch] ' + (e instanceof Error ? e.message : String(e)),
+        ts: Date.now(),
+      }]);
+    }
 
     setRunning(false);
     setCurrentFeatureId(null);
