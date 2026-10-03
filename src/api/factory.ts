@@ -219,3 +219,85 @@ export const patchApi = {
     return parsed.plan as PatchPlan;
   },
 };
+
+// ── Two-APK diff ──────────────────────────────────────────────────
+export interface ApkMeta {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  dexCount: number;
+  classCount: number;
+  entryCount: number;
+  totalCompressed: number;
+  totalUncompressed: number;
+}
+
+export interface DiffSummary {
+  classesAdded: number;
+  classesRemoved: number;
+  filesAdded: number;
+  filesRemoved: number;
+  sizeDeltaBytes: number;
+  dexDelta: number;
+  classDelta: number;
+}
+
+export interface DiffFeatureDelta {
+  aHits: number;
+  bHits: number;
+  delta: number;
+  addedDex: string[];
+  removedDex: string[];
+}
+
+export interface ApkDiff {
+  ok: boolean;
+  elapsedMs: number;
+  apkA: ApkMeta;
+  apkB: ApkMeta;
+  summary: DiffSummary;
+  classes: { added: string[]; removed: string[]; addedTotal: number; removedTotal: number };
+  files: { added: string[]; removed: string[]; addedTotal: number; removedTotal: number };
+  extensions: Array<{ ext: string; a: number; b: number; delta: number }>;
+  features: Record<string, DiffFeatureDelta>;
+}
+
+const DIFF_APKS_SCRIPT = `${SOVEREIGN_HOME}/diff-apks.mjs`;
+
+export const diffApi = {
+  compare: async (apkA: string, apkB: string): Promise<ApkDiff> => {
+    const r = await factoryExec.run('node', [DIFF_APKS_SCRIPT, apkA, apkB], { timeoutMs: 300_000 });
+    if (r.result.exitCode !== 0) throw new Error(r.result.stderr || `diff exit ${r.result.exitCode}`);
+    let parsed: any;
+    try { parsed = JSON.parse(r.result.stdout); }
+    catch { throw new Error('diff non-JSON: ' + r.result.stdout.slice(0, 200)); }
+    if (!parsed.ok) throw new Error(parsed.error || 'diff failed');
+    return parsed as ApkDiff;
+  },
+};
+
+// ── Multi-turn DeepSeek chat ─────────────────────────────────────
+export interface ChatResponse {
+  ok: boolean;
+  response: {
+    code: number;
+    msg: string;
+    data: { content: string; chat_session_id: string; message_id: string | null };
+  };
+}
+
+export const chatApi = {
+  send: async (
+    prompt: string,
+    opts: { thinking?: boolean; search?: boolean } = {},
+  ): Promise<string> => {
+    const r = await call<ChatResponse>('/deepseek/chat', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, ...opts }),
+    });
+    if (!r.ok || r.response?.code !== 0) {
+      throw new Error(r.response?.msg || 'chat failed');
+    }
+    return r.response.data.content;
+  },
+};

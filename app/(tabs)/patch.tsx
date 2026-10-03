@@ -17,7 +17,9 @@ import * as DocumentPicker from 'expo-document-picker';
 
 import { PHASES, PHASE_FEATURES } from '@/engine/phases';
 import { runPhase } from '@/engine/runner';
-import { loadFeatureData, clearFeatureCache } from '@/engine/realFeatures';
+import { loadFeatureData, clearFeatureCache, getLastResponse } from '@/engine/realFeatures';
+import { persistScan, attachPlanToScan } from '@/hooks/useScanStore';
+import { fingerprintApk } from '@/db/scans';
 import { featureMap } from '@/features/registry';
 import { runGhostSuiteAnalysis } from '@/engine/ghost-suite';
 import type { FeatureResult, HandlerContext, UploadedFile, WorkflowPhase } from '@/engine/types';
@@ -50,6 +52,7 @@ export default function PatchScreen() {
   const [apkPath, setApkPath] = useState('');
   const [realLoading, setRealLoading] = useState(false);
   const [realError, setRealError] = useState<string | null>(null);
+  const [currentScanId, setCurrentScanId] = useState<string | null>(null);
 
   const currentStepId: StepId = STEPS[step].id;
 
@@ -207,6 +210,35 @@ export default function PatchScreen() {
         setStep(1);
         setRealLoading(false);
         await runCurrentPhase('investigate');
+
+        // Persist scan to local DB
+        const resp = getLastResponse();
+        if (resp) {
+          const apkName = path.split('/').pop() || 'target.apk';
+          const apkHash = await fingerprintApk(path, apkName, resp.apkSize);
+          const features = Object.values(resp.features).map((f) => ({
+            featureId: f.id,
+            status: f.status,
+            message: f.message,
+            totalHits: f.totalHits,
+            dexCount: f.dexCount,
+            patterns: f.patterns,
+            topSignalClass: f.hits[0]?.signalClasses?.[0] ?? null,
+            rawJson: { hits: f.hits.slice(0, 5) },
+          }));
+          const scanId = await persistScan({
+            apkPath: path,
+            apkName,
+            apkSize: resp.apkSize,
+            apkHash,
+            elapsedMs: resp.elapsedMs,
+            dexTotal: resp.dexTotal,
+            dexParsed: resp.dexParsed,
+            totalClasses: resp.totalClasses,
+            features,
+          });
+          setCurrentScanId(scanId);
+        }
       } catch (e) {
         setRealError(e instanceof Error ? e.message : String(e));
         setRealLoading(false);
@@ -307,7 +339,14 @@ export default function PatchScreen() {
               logs={logs}
             />
             <View style={{ height: spacing.md }} />
-            <PatchPlanPanel apkPath={apkPath} />
+            <PatchPlanPanel
+              apkPath={apkPath}
+              onPlanReady={(plan, goal) => {
+                if (currentScanId) {
+                  void attachPlanToScan(currentScanId, plan, goal);
+                }
+              }}
+            />
           </View>
         )}
 

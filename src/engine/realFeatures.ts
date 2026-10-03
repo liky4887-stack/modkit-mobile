@@ -25,3 +25,7 @@ export function getCacheStats(): { apkPath: string; count: number } | null {
   if (!cache) return null;
   return { apkPath: cache.apkPath, count: Object.keys(cache.data.features).length };
 }
+
+export function getLastResponse(): FeatureCheckResponse | null {
+  return cache?.data ?? null;
+}

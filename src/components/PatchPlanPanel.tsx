@@ -19,7 +19,13 @@ const GOALS: { id: PatchGoal; label: string; icon: any; color: string }[] = [
   { id: 'remove-feature', label: 'REMOVE FEATURE', icon: Trash2,      color: colors.danger },
 ];
 
-export function PatchPlanPanel({ apkPath }: { apkPath: string }) {
+export function PatchPlanPanel({
+  apkPath,
+  onPlanReady,
+}: {
+  apkPath: string;
+  onPlanReady?: (plan: PatchPlan, goal: PatchGoal) => void;
+}) {
   const [goal, setGoal] = useState<PatchGoal>('report');
   const [loading, setLoading] = useState(false);
   const [plan, setPlan] = useState<PatchPlan | null>(null);
@@ -36,6 +42,7 @@ export function PatchPlanPanel({ apkPath }: { apkPath: string }) {
     try {
       const p = await patchApi.plan(apkPath.trim(), goal);
       setPlan(p);
+      onPlanReady?.(p, goal);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
