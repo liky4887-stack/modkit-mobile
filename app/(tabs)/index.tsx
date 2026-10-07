@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, RefreshControl, Pressable, Alert,
+  View, Text, StyleSheet, ScrollView, RefreshControl, Pressable, Alert, TextInput,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
@@ -41,6 +41,10 @@ export default function JobsTab() {
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
+  const [directPath, setDirectPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+  const [directRunning, setDirectRunning] = useState(false);
+  const [directStatus, setDirectStatus] = useState<string | null>(null);
+  const [directSteps, setDirectSteps] = useState<string[]>([]);
 
   const loadStaged = useCallback(async () => {
     const list = await apkPicker.list();
@@ -90,6 +94,68 @@ export default function JobsTab() {
       setRunStatus('FAIL · ' + msg);
     }
     setPicking(false);
+  };
+
+  const runDirect = async () => {
+    if (directRunning) return;
+    const path = directPath.trim();
+    if (!path) { Alert.alert('No path'); return; }
+    setDirectRunning(true);
+    setDirectSteps([]);
+    setDirectStatus('checking file…');
+    try {
+      const probe = await fetch('http://127.0.0.1:8790/executeCommand', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'ls', args: ['-la', path], timeoutMs: 5000 }),
+      }).then(r => r.json());
+      if (!probe.ok || probe.result.exitCode !== 0) throw new Error('file not readable: ' + path);
+
+      const name = path.split('/').pop() || 'target.apk';
+      setDirectStatus('loading into sidecar…');
+      const load = await fetch('http://127.0.0.1:8790/tools/load', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apk_path: path }),
+      }).then(r => r.json());
+      if (!load.ok) throw new Error('sidecar load failed: ' + (load.error || 'unknown'));
+
+      setDirectStatus('dex=' + load.dex_count + '  pkg=' + load.package + '  v' + load.versionName);
+
+      const job = await pipelineStore.createJob({
+        scanId: 'direct-' + Date.now(),
+        apkPath: path,
+        apkName: name,
+        apkSize: load.apkSize || 0,
+      });
+      await pipelineStore.createPhasesForJob(job.id);
+      await pipelineStore.setJobState(job.id, 'queued');
+
+      setDirectStatus('investigating via agent…');
+      const investigation = await investigateRunner.run({
+        jobId: job.id,
+        phase: 'partition',
+        query: 'Find every third-party SDK the app links by name (Sentry, Firebase, Adjust, Tencent, Facebook, LINE, etc.). For each SDK, note which class references it.',
+        onStep: (step: AgentStep) => {
+          const label = step.kind === 'tool'
+            ? '#' + step.iteration + '  tool ' + step.tool + '  (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
+            : step.kind === 'final'
+              ? '#' + step.iteration + '  final'
+              : '#' + step.iteration + '  parse_error';
+          setDirectSteps(prev => [...prev, label]);
+        },
+      });
+
+      setDirectStatus(
+        'done · ' + investigation.toolCallCount + ' tool calls · ' +
+        investigation.totalMs + 'ms · inv=' + investigation.investigationId.slice(0, 8)
+      );
+      await loadJobs();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setDirectStatus('FAIL · ' + msg);
+    }
+    setDirectRunning(false);
   };
 
   const doRun = async () => {
@@ -189,6 +255,49 @@ export default function JobsTab() {
             })}
           </View>
         )}
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>DIRECT PATH (skip picker)</Text>
+          <Text style={styles.help}>
+            Reads the file in place via the backend. No copy, no disk needed.
+          </Text>
+          <TextInput
+            value={directPath}
+            onChangeText={setDirectPath}
+            style={styles.pathInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!directRunning}
+            placeholder="/storage/emulated/0/.../target.apk"
+            placeholderTextColor={colors.textTertiary}
+          />
+          <Pressable
+            onPress={runDirect}
+            disabled={directRunning}
+            style={[styles.runBtn, directRunning && { opacity: 0.5 }]}
+          >
+            <Text style={styles.runBtnText}>
+              {directRunning ? 'RUNNING…' : 'RUN DIRECT'}
+            </Text>
+          </Pressable>
+          {directStatus && (
+            <Text
+              style={[
+                styles.statusText,
+                directStatus.startsWith('FAIL') && { color: colors.danger },
+              ]}
+            >
+              {directStatus}
+            </Text>
+          )}
+          {directSteps.length > 0 && (
+            <View style={{ marginTop: 8 }}>
+              {directSteps.map((line, i) => (
+                <Text key={i} style={styles.stepText}>{line}</Text>
+              ))}
+            </View>
+          )}
+        </View>
 
         {selected && (
           <View style={styles.block}>
@@ -304,6 +413,12 @@ const styles = StyleSheet.create({
   stepText: {
     color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular',
     fontSize: 10, lineHeight: 14,
+  },
+  pathInput: {
+    color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10, backgroundColor: colors.pureBlack,
+    borderRadius: 6, borderWidth: 1, borderColor: colors.border,
+    padding: 8, marginBottom: 8,
   },
   jobRow: {
     paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border,
