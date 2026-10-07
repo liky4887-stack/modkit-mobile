@@ -315,4 +315,55 @@ export const chatRegistry = {
       elapsedMs: r?.elapsed_ms ?? 0,
     };
   },
+  // Group chats by job id, for the pipeline-aware CHATS tab.
+  // Only returns chats that belong to a real job.
+  async listGroupedByJob(withinHours = 48): Promise<Record<string, ChatRecord[]>> {
+    const db = await getDb();
+    const cutoff = Date.now() - withinHours * 3600 * 1000;
+    const rows = await db.getAllAsync<any>(
+      `SELECT * FROM pipeline_chats
+        WHERE job_id IS NOT NULL
+          AND started_at > ?
+        ORDER BY job_id DESC, started_at ASC`,
+      [cutoff]
+    );
+    const byJob: Record<string, ChatRecord[]> = {};
+    for (const r of rows) {
+      const c = rowToChat(r);
+      const key = c.jobId || '_orphan';
+      if (!byJob[key]) byJob[key] = [];
+      byJob[key].push(c);
+    }
+    return byJob;
+  },
+
+  // Counts of chat states within a job
+  async jobChatStats(jobId: string): Promise<{
+    total: number; open: number; done: number; failed: number;
+    turns: number; tokensIn: number; tokensOut: number;
+  }> {
+    const db = await getDb();
+    const r = await db.getFirstAsync<any>(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open,
+         SUM(CASE WHEN state = 'closed' THEN 1 ELSE 0 END) AS done,
+         SUM(CASE WHEN state = 'failed' OR state = 'aborted' THEN 1 ELSE 0 END) AS failed,
+         COALESCE(SUM(turns),0) AS turns,
+         COALESCE(SUM(tokens_in),0) AS tokens_in,
+         COALESCE(SUM(tokens_out),0) AS tokens_out
+       FROM pipeline_chats WHERE job_id = ?`,
+      [jobId]
+    );
+    return {
+      total: r?.total ?? 0,
+      open: r?.open ?? 0,
+      done: r?.done ?? 0,
+      failed: r?.failed ?? 0,
+      turns: r?.turns ?? 0,
+      tokensIn: r?.tokens_in ?? 0,
+      tokensOut: r?.tokens_out ?? 0,
+    };
+  },
+
 };

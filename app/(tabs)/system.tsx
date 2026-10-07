@@ -89,6 +89,32 @@ export default function SystemTab() {
   const [agentResult, setAgentResult] = useState<string | null>(null);
   const [agentSteps, setAgentSteps] = useState<string[]>([]);
 
+  const dumpHttpToDisk = useCallback(async () => {
+    try {
+      const db = await SQLite.openDatabaseAsync('modkit-v2.db');
+      const rows = await db.getAllAsync<any>(
+        `SELECT id, ts, method, url, path, req_preview, res_status, res_preview,
+                duration_ms, error
+           FROM http_log
+           ORDER BY id DESC LIMIT 300`
+      );
+      const json = JSON.stringify(rows, null, 2);
+      const path = '/storage/emulated/0/Download/modkit-dumps/http-log-' + Date.now() + '.json';
+      const res = await fetch('http://127.0.0.1:8790/file/write', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path, content: json }),
+      }).then(r => r.json());
+      if (res.ok) {
+        setTestResult('DUMP OK · ' + rows.length + ' rows → ' + path);
+      } else {
+        setTestResult('DUMP FAIL · ' + (res.error || 'unknown'));
+      }
+    } catch (e) {
+      setTestResult('DUMP FAIL · ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }, []);
+
   const runAgentTest = useCallback(async () => {
     setAgentBusy(true);
     setAgentResult(null);
@@ -216,6 +242,12 @@ export default function SystemTab() {
             <Text style={styles.testBtnText}>
               {testBusy ? 'CALLING DEEPSEEK…' : 'TEST DEEPSEEK'}
             </Text>
+          </Pressable>
+          <Pressable
+            onPress={dumpHttpToDisk}
+            style={[styles.testBtn, { marginTop: 6 }]}
+          >
+            <Text style={styles.testBtnText}>DUMP HTTP LOG</Text>
           </Pressable>
           {testResult && (
             <Text style={[styles.blockMeta, { marginTop: 8, color: testResult.startsWith('OK') ? colors.accent : colors.danger }]}>

@@ -4,76 +4,102 @@ import {
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
-import { chatLifecycle } from '@/chat/chatLifecycle';
 import { chatRegistry, ChatRecord, TurnRecord } from '@/chat/chatRegistry';
+import { pipelineStore } from '@/pipeline/pipelineStore';
 
-interface Snapshot {
-  active: ChatRecord[];
-  recent: ChatRecord[];
-  stats24h: any;
-  limiter: any;
-}
-
-function fmtTime(ts: number | null): string {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+interface JobGroup {
+  jobId: string;
+  jobName: string;
+  chats: ChatRecord[];
+  stats: {
+    total: number; open: number; done: number; failed: number;
+    turns: number; tokensIn: number; tokensOut: number;
+  };
 }
 
 function fmtAgo(ts: number | null): string {
-  if (!ts) return 'never';
+  if (!ts) return '—';
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 5) return 'now';
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.floor(s / 60) + 'm';
-  return Math.floor(s / 3600) + 'h';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
 }
 
 export default function ChatsTab() {
-  const [snap, setSnap] = useState<Snapshot | null>(null);
+  const [groups, setGroups] = useState<JobGroup[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedChat, setExpandedChat] = useState<string | null>(null);
+  const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [turns, setTurns] = useState<TurnRecord[]>([]);
 
-  const refreshSilent = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const s = await chatLifecycle.snapshot();
-      setSnap(s);
+      const byJob = await chatRegistry.listGroupedByJob(48);
+      const out: JobGroup[] = [];
+      for (const jobId of Object.keys(byJob)) {
+        const chats = byJob[jobId];
+        const stats = await chatRegistry.jobChatStats(jobId);
+        let jobName = jobId.slice(0, 8);
+        try {
+          const job = await pipelineStore.getJob(jobId);
+          if (job) jobName = job.apkName || job.apkPath.split('/').pop() || jobId.slice(0, 8);
+        } catch {}
+        out.push({ jobId, jobName, chats, stats });
+      }
+      // Sort groups by most recent chat activity
+      out.sort((a, b) => {
+        const aLast = Math.max(...a.chats.map(c => c.lastTurnAt || c.startedAt));
+        const bLast = Math.max(...b.chats.map(c => c.lastTurnAt || c.startedAt));
+        return bLast - aLast;
+      });
+      setGroups(out);
     } catch {
-      setSnap(null);
+      setGroups([]);
     }
   }, []);
 
+  const refreshSilent = useCallback(() => { void load(); }, [load]);
+
   const refreshManual = useCallback(async () => {
     setRefreshing(true);
-    await refreshSilent();
+    await load();
     setRefreshing(false);
-  }, [refreshSilent]);
+  }, [load]);
 
   useEffect(() => {
-    void chatLifecycle.sweepStuck().catch(() => {});
-    void refreshSilent();
-    const t = setInterval(() => { void refreshSilent(); }, 2000);
+    void load();
+    const t = setInterval(refreshSilent, 3000);
     return () => clearInterval(t);
-  }, [refreshSilent]);
+  }, [load, refreshSilent]);
 
   const viewTurns = async (chatId: string) => {
-    if (expanded === chatId) { setExpanded(null); setTurns([]); return; }
+    if (expandedChat === chatId) {
+      setExpandedChat(null);
+      setTurns([]);
+      return;
+    }
     const rows = await chatRegistry.listTurns(chatId, 200);
     setTurns(rows);
-    setExpanded(chatId);
+    setExpandedChat(chatId);
+    setExpandedJob(null);
+  };
+
+  const toggleJob = (jobId: string) => {
+    setExpandedJob(expandedJob === jobId ? null : jobId);
+    setExpandedChat(null);
+    setTurns([]);
   };
 
   const closeChat = async (chatId: string) => {
     await chatRegistry.abort(chatId, 'user_cancelled');
-    void refreshSilent();
+    void load();
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <Text style={styles.topBarTitle}>MODKIT · CHATS</Text>
+        <Text style={styles.topBarTitle}>MODKIT · PIPELINE CHATS</Text>
       </View>
 
       <ScrollView
@@ -81,90 +107,83 @@ export default function ChatsTab() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshManual} tintColor={colors.accent} />}
       >
-        {snap && (
-          <>
-            <View style={styles.statsBlock}>
-              <Text style={styles.statsLabel}>LIMITER</Text>
-              <Text style={styles.statsValue}>
-                {snap.limiter.active} / {snap.limiter.maxConcurrent} concurrent
-                {' · '}
-                {snap.limiter.lastMinuteCount} / {snap.limiter.maxPerMinute} per min
-              </Text>
-              {snap.limiter.backoffRemainingMs > 0 && (
-                <Text style={[styles.statsValue, { color: colors.danger }]}>
-                  backoff {Math.ceil(snap.limiter.backoffRemainingMs / 1000)}s
-                  {' · '}fails {snap.limiter.consecutiveFailures}
-                </Text>
-              )}
-            </View>
+        {groups.length === 0 && (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>NO PIPELINE CHATS</Text>
+            <Text style={styles.emptySub}>
+              Every chat that runs as part of a pipeline job appears here,
+              grouped by job. Fire a job from the JOBS tab.
+            </Text>
+          </View>
+        )}
 
-            <View style={styles.statsBlock}>
-              <Text style={styles.statsLabel}>24H</Text>
-              <Text style={styles.statsValue}>
-                {snap.stats24h.total} chats · {snap.stats24h.turnsTotal} turns
-              </Text>
-              <Text style={styles.statsValue}>
-                in {snap.stats24h.tokensIn} · out {snap.stats24h.tokensOut} tokens
-              </Text>
-            </View>
-
-            <Text style={styles.sectionTitle}>ACTIVE ({snap.active.length})</Text>
-            {snap.active.length === 0 && (
-              <Text style={styles.emptyLine}>No open sessions.</Text>
-            )}
-            {snap.active.map((c) => (
-              <View key={c.id} style={styles.chatRow}>
-                <Pressable onPress={() => viewTurns(c.id)} style={{ flex: 1 }}>
-                  <Text style={styles.chatLine}>
-                    {c.phase} · {c.unitId || c.purpose || c.id.slice(0, 6)}
-                  </Text>
-                  <Text style={styles.chatMeta}>
-                    turns {c.turns} · {c.tokensIn + c.tokensOut} tok · last {fmtAgo(c.lastTurnAt)}
-                  </Text>
-                  {c.dsSessionId && (
-                    <Text style={styles.chatSession}>session {c.dsSessionId.slice(0, 8)}…</Text>
-                  )}
-                </Pressable>
-                <Pressable onPress={() => closeChat(c.id)} style={styles.killBtn}>
-                  <Text style={styles.killText}>ABORT</Text>
-                </Pressable>
-              </View>
-            ))}
-
-            {expanded && turns.length > 0 && (
-              <View style={styles.turnsBlock}>
-                <Text style={styles.sectionTitle}>TRANSCRIPT · {turns.length} turns</Text>
-                {turns.map((t) => (
-                  <View key={t.id} style={styles.turnRow}>
-                    <Text style={styles.turnMeta}>
-                      #{t.turnIndex} {t.role} · {t.tokens} tok · {t.elapsedMs}ms {t.error ? 'ERR' : ''}
-                    </Text>
-                    <Text style={styles.turnBody} numberOfLines={6}>
-                      {t.content || ('(no content) ' + (t.error || ''))}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            <Text style={styles.sectionTitle}>RECENT</Text>
-            {snap.recent.length === 0 && (
-              <Text style={styles.emptyLine}>No chat history yet.</Text>
-            )}
-            {snap.recent.slice(0, 30).map((c) => (
-              <View key={c.id} style={styles.chatRow}>
+        {groups.map((g) => {
+          const isOpen = expandedJob === g.jobId;
+          const jobAge = g.chats[g.chats.length - 1]?.lastTurnAt || g.chats[0]?.startedAt || null;
+          return (
+            <View key={g.jobId} style={styles.groupBlock}>
+              <Pressable onPress={() => toggleJob(g.jobId)} style={styles.groupHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.chatLine}>
-                    [{c.state}] {c.phase} · {c.unitId || c.purpose || c.id.slice(0, 6)}
-                  </Text>
-                  <Text style={styles.chatMeta}>
-                    {c.turns} turns · {c.elapsedMs}ms · {fmtTime(c.startedAt)}
+                  <Text style={styles.groupTitle} numberOfLines={1}>{g.jobName}</Text>
+                  <Text style={styles.groupMeta}>
+                    {g.chats.length} chats · {g.stats.turns} turns · {g.stats.tokensIn + g.stats.tokensOut} tok · {fmtAgo(jobAge)}
                   </Text>
                 </View>
+                <Text style={styles.groupChevron}>{isOpen ? '▾' : '▸'}</Text>
+              </Pressable>
+
+              <View style={styles.badgeRow}>
+                {g.stats.open > 0 && <Text style={[styles.badge, styles.badgeOpen]}>{g.stats.open} open</Text>}
+                {g.stats.done > 0 && <Text style={[styles.badge, styles.badgeDone]}>{g.stats.done} done</Text>}
+                {g.stats.failed > 0 && <Text style={[styles.badge, styles.badgeFail]}>{g.stats.failed} failed</Text>}
               </View>
-            ))}
-          </>
-        )}
+
+              {isOpen && (
+                <View style={styles.chatsList}>
+                  {g.chats.map((c) => {
+                    const isExpanded = expandedChat === c.id;
+                    return (
+                      <View key={c.id} style={styles.chatRow}>
+                        <Pressable onPress={() => viewTurns(c.id)} style={{ flex: 1 }}>
+                          <View style={styles.chatLine}>
+                            <Text style={styles.chatPhase}>{c.phase}</Text>
+                            <Text style={styles.chatUnit} numberOfLines={1}>
+                              {c.unitId ? c.unitId.slice(0, 40) : (c.purpose || '—')}
+                            </Text>
+                          </View>
+                          <Text style={styles.chatMeta}>
+                            [{c.state}] {c.turns} turns · {c.elapsedMs}ms · {fmtAgo(c.lastTurnAt || c.startedAt)}
+                          </Text>
+                        </Pressable>
+                        {c.state === 'open' && (
+                          <Pressable onPress={() => closeChat(c.id)} style={styles.killBtn}>
+                            <Text style={styles.killText}>ABORT</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {expandedChat && g.chats.some(c => c.id === expandedChat) && (
+                <View style={styles.turnsBlock}>
+                  <Text style={styles.turnsTitle}>TRANSCRIPT · {turns.length} turns</Text>
+                  {turns.map((t) => (
+                    <View key={t.id} style={styles.turnRow}>
+                      <Text style={styles.turnMeta}>
+                        #{t.turnIndex} {t.role} · {t.tokens} tok · {t.elapsedMs}ms {t.error ? '· ERR' : ''}
+                      </Text>
+                      <Text style={styles.turnBody} numberOfLines={8}>
+                        {t.content || ('(no content) ' + (t.error || ''))}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          );
+        })}
       </ScrollView>
     </View>
   );
@@ -181,41 +200,66 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   content: { padding: spacing.md },
-  statsBlock: {
-    padding: spacing.md, marginBottom: spacing.sm,
-    backgroundColor: colors.surface, borderRadius: 8,
-    borderWidth: 1, borderColor: colors.border,
+  empty: { marginTop: 80, alignItems: 'center', paddingHorizontal: spacing.xl },
+  emptyTitle: {
+    color: colors.textTertiary, fontFamily: 'Inter-SemiBold', fontSize: 13,
+    letterSpacing: 2, marginBottom: spacing.sm,
   },
-  statsLabel: {
-    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10,
-    letterSpacing: 2, marginBottom: 4,
-  },
-  statsValue: {
-    color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11,
-    lineHeight: 16,
-  },
-  sectionTitle: {
-    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10,
-    letterSpacing: 2, marginTop: spacing.md, marginBottom: spacing.sm,
-  },
-  emptyLine: {
+  emptySub: {
     color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 11,
-    paddingVertical: 6,
+    lineHeight: 16, textAlign: 'center', opacity: 0.7,
   },
-  chatRow: {
+  groupBlock: {
+    marginBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: 8, borderWidth: 1, borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  groupHeader: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: spacing.sm, paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
+    paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm,
   },
-  chatLine: {
-    color: colors.textPrimary, fontFamily: 'Inter-Medium', fontSize: 12,
+  groupTitle: {
+    color: colors.textPrimary, fontFamily: 'Inter-SemiBold', fontSize: 13,
   },
-  chatMeta: {
+  groupMeta: {
     color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10,
     marginTop: 2,
   },
-  chatSession: {
-    color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9,
+  groupChevron: {
+    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 14, marginLeft: 8,
+  },
+  badgeRow: {
+    flexDirection: 'row', gap: 6,
+    paddingHorizontal: spacing.md, paddingBottom: spacing.sm,
+  },
+  badge: {
+    fontFamily: 'Inter-Medium', fontSize: 9, letterSpacing: 1,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+  },
+  badgeOpen: { color: colors.accent, backgroundColor: 'rgba(0,255,136,0.08)' },
+  badgeDone: { color: colors.textTertiary, backgroundColor: 'rgba(255,255,255,0.04)' },
+  badgeFail: { color: colors.danger, backgroundColor: 'rgba(255,80,80,0.08)' },
+  chatsList: {
+    borderTopWidth: 1, borderTopColor: colors.border,
+    paddingHorizontal: spacing.sm,
+  },
+  chatRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  chatLine: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  chatPhase: {
+    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10,
+    letterSpacing: 1, textTransform: 'uppercase',
+  },
+  chatUnit: {
+    color: colors.textPrimary, fontFamily: 'Inter-Medium', fontSize: 11,
+    flexShrink: 1,
+  },
+  chatMeta: {
+    color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10,
     marginTop: 2,
   },
   killBtn: {
@@ -226,9 +270,13 @@ const styles = StyleSheet.create({
     color: colors.danger, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1,
   },
   turnsBlock: {
-    marginTop: spacing.sm, padding: spacing.sm,
+    margin: spacing.sm, padding: spacing.sm,
     backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 6,
     borderWidth: 1, borderColor: colors.border,
+  },
+  turnsTitle: {
+    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10,
+    letterSpacing: 2, marginBottom: 8,
   },
   turnRow: {
     paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border,

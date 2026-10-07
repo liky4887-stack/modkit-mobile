@@ -3,6 +3,8 @@
 import { getDb } from '@/db/client';
 import { agentLoop, AgentStep } from '@/agent/agentLoop';
 import { eventBus } from '@/orchestration/eventBus';
+import { deepseekClient } from '@/chat/deepseekClient';
+import { pipelineStore } from './pipelineStore';
 
 export interface InvestigateRequest {
   jobId: string;
@@ -118,6 +120,21 @@ export const investigateRunner = {
         payload: { action: 'investigate_persist_failed', error: String(e) },
       });
     }
+
+    // Bump ds_calls on the job so the JOBS tab shows real activity
+    try {
+      await pipelineStore.bumpDs(req.jobId, {
+        calls: 1,
+        elapsedMs: result.totalMs,
+        tokens: 0,
+        sessionId: result.dsSessionId,
+      });
+    } catch {}
+
+    // Close the chat so it doesn't linger as [open] in the CHATS tab
+    try {
+      await deepseekClient.close(result.chatId);
+    } catch {}
 
     eventBus.emit({
       scanId, correlationId: scanId, phase: phase as any,

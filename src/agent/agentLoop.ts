@@ -63,6 +63,52 @@ function systemPreamble(): string {
   ].join('\n');
 }
 
+// Transcript truncation policy:
+//   - last KEEP_RECENT tool results stay at full size
+//   - older ones keep first OLD_HEAD + last OLD_TAIL chars
+//   - total transcript capped at MAX_TRANSCRIPT_CHARS
+// Prevents quadratic prompt growth that leads to slow calls and rate limits.
+const KEEP_RECENT = 5;
+const OLD_HEAD = 500;
+const OLD_TAIL = 300;
+const MAX_TRANSCRIPT_CHARS = 40000;
+
+function summarizeOld(s: string): string {
+  if (s.length <= OLD_HEAD + OLD_TAIL + 50) return s;
+  return s.slice(0, OLD_HEAD) +
+    '\n…[' + (s.length - OLD_HEAD - OLD_TAIL) + ' chars truncated]…\n' +
+    s.slice(-OLD_TAIL);
+}
+
+function buildTranscript(lines: string[]): string {
+  // Split transcript into segments at each TOOL RESULT boundary.
+  // We keep the last KEEP_RECENT segments at full size; older ones get
+  // summarized.
+  const segments: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('TOOL RESULT (')) {
+      if (current.length > 0) segments.push(current.join('\n'));
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) segments.push(current.join('\n'));
+
+  const cutoff = Math.max(0, segments.length - KEEP_RECENT);
+  const out: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    out.push(i < cutoff ? summarizeOld(segments[i]) : segments[i]);
+  }
+  let joined = out.join('\n\n');
+  if (joined.length > MAX_TRANSCRIPT_CHARS) {
+    joined = joined.slice(-MAX_TRANSCRIPT_CHARS);
+    joined = '…[earlier transcript truncated]…\n\n' + joined;
+  }
+  return joined;
+}
+
 function trimResult(s: string): string {
   if (s.length <= MAX_TOOL_RESULT_CHARS) return s;
   return s.slice(0, MAX_TOOL_RESULT_CHARS) + '\n…[truncated ' + (s.length - MAX_TOOL_RESULT_CHARS) + ' chars]';
@@ -172,7 +218,7 @@ export const agentLoop = {
       const sections: string[] = [preamble, '', userBlock];
       if (transcript.length > 0) {
         sections.push('=== CONVERSATION SO FAR ===');
-        for (const line of transcript) sections.push(line);
+        sections.push(buildTranscript(transcript));
         sections.push('=== END CONVERSATION SO FAR ===');
         sections.push('');
       }
