@@ -8,7 +8,7 @@ import { eventBus } from '@/orchestration/eventBus';
 import { renderToolList, isValidTool } from './toolDefs';
 
 export const AGENT_PROMPT_VERSION = 'agent-v1';
-const MAX_ITERATIONS = 12;
+const MAX_ITERATIONS = 20;
 const MAX_TOOL_RESULT_CHARS = 12000;
 
 export interface AgentStep {
@@ -59,7 +59,7 @@ function systemPreamble(): string {
     '  • JSON only — the orchestrator parses replies programmatically.',
     '  • Prefer specific keyword searches over bulk dumps.',
     '  • If a call errors, try a different method.',
-    '  • Budget: at most 12 calls per question.',
+    '  • Budget: at most 20 calls per question.',
   ].join('\n');
 }
 
@@ -149,7 +149,13 @@ export const agentLoop = {
         sections.push('=== END CONVERSATION SO FAR ===');
         sections.push('');
       }
-      sections.push('Your reply (one JSON object only):');
+      // Wrap-up pressure: last 2 iterations, ask for a final answer
+      const remaining = maxIter - i;
+      if (remaining <= 2) {
+        sections.push('You have ' + remaining + ' iteration(s) left. Return {"final":"<markdown report>"} now with what you have learned. Do not request more tool calls.');
+      } else {
+        sections.push('Your reply (one JSON object only):');
+      }
       const prompt = sections.join('\n');
 
       // Send to DeepSeek. Reuse local chat row for persistence.

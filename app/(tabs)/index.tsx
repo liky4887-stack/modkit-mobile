@@ -129,7 +129,8 @@ export default function JobsTab() {
         apkSize: load.apkSize || 0,
       });
       await pipelineStore.createPhasesForJob(job.id);
-      await pipelineStore.setJobState(job.id, 'queued');
+      await pipelineStore.setJobState(job.id, 'investigating');
+      await pipelineStore.setCurrent(job.id, 'investigate');
 
       setDirectStatus('investigating via agent…');
       const investigation = await investigateRunner.run({
@@ -150,6 +151,8 @@ export default function JobsTab() {
         'done · ' + investigation.toolCallCount + ' tool calls · ' +
         investigation.totalMs + 'ms · inv=' + investigation.investigationId.slice(0, 8)
       );
+      await pipelineStore.setJobState(job.id, 'done');
+      await pipelineStore.setCurrent(job.id, null);
       await loadJobs();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
