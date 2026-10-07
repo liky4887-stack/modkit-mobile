@@ -212,6 +212,7 @@ export const agentLoop = {
 
       if (parsed.kind === 'parse_error') {
         const rawText = (r.content || '').trim();
+        console.log('[agent] parse_error turn=' + i + ' rawLen=' + rawText.length + ' raw=' + JSON.stringify(rawText.slice(0, 200)));
 
         // Rule 1: if the reply is clearly NOT a JSON attempt, accept it
         // as the final answer. Markdown reports, prose summaries, and

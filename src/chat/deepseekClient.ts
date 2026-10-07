@@ -131,7 +131,13 @@ export const deepseekClient = {
           model,
           mode: opts.mode ?? 'chat',
         };
-        if (chat.dsSessionId) body.sessionId = chat.dsSessionId;
+        // DO NOT send sessionId. chat.deepseek.com accumulates server-side
+        // history keyed by session_id. After ~10 turns the accumulated
+        // context crosses a limit and DeepSeek returns HTTP 200 with
+        // content="" instead of an error. Every subsequent call on that
+        // session_id also returns empty, poisoning the rest of the run.
+        // The full transcript is already sent inline in `prompt`, so no
+        // context is lost by always opening a fresh session.
 
         const reqBody = JSON.stringify(body);
 
@@ -178,6 +184,8 @@ export const deepseekClient = {
 
         const content = json.response.data.content ?? '';
         const dsSessionId = json.response.data.chat_session_id ?? null;
+
+        console.log('[DS] turn attempt=' + attempt + ' contentLen=' + content.length + ' sid=' + (dsSessionId || 'none') + ' preview=' + JSON.stringify(content.slice(0, 120)));
 
         // Empty content on 200 is the signature of the cookie bridge
         // losing a race against a concurrent call. Retry once.
