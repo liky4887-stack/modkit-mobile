@@ -116,7 +116,6 @@ export default function JobsTab() {
       await pipelineStore.createPhasesForJob(job.id);
 
       const result = await pipelineRunner.run(job.id, {
-        stopAfter: 'dispatch' as PhaseId,
         onPhase: (phase, state, summary) => {
           setDirectSteps(prev => [...prev, '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
         },

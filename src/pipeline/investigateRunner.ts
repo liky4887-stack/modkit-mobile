@@ -6,7 +6,7 @@ import { eventBus } from '@/orchestration/eventBus';
 
 export interface InvestigateRequest {
   jobId: string;
-  phase: 'partition' | 'investigate' | 'coordinate' | 'verify';
+  phase: 'partition' | 'investigate' | 'coordinate' | 'propose' | 'verify' | 'export';
   query: string;
   unitId?: string | null;
   maxIterations?: number;

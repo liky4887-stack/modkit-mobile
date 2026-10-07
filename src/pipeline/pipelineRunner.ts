@@ -8,6 +8,7 @@ import { investigateRunner } from './investigateRunner';
 import { eventBus } from '@/orchestration/eventBus';
 import { getDb } from '@/db/client';
 import type { AgentStep } from '@/agent/agentLoop';
+import { PHASE_QUERIES } from './phaseQueries';
 
 export type PhaseId = typeof PHASES_ORDER[number];
 
@@ -207,10 +208,249 @@ async function phaseDispatch(ctx: PhaseContext): Promise<string> {
   return units.length + ' units queued (rate limit 3 concurrent)';
 }
 
-// ── stubs (09b) ─────────────────────────────────────────
+// ── investigate (per unit, rate-limited parallelism) ────
 
-async function phaseNotImplemented(_ctx: PhaseContext, name: string): Promise<string> {
-  return 'not implemented in 09a — pending Session 09b (' + name + ')';
+const INVESTIGATE_CONCURRENCY = 3;
+
+async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
+  const units = await pipelineStore.listUnits(ctx.job.id);
+  const queued = units.filter(u => u.state === 'queued');
+  if (queued.length === 0) {
+    return '0 queued units (all already done)';
+  }
+
+  ctx.emit('investigate', 'start', queued.length + ' units to process');
+
+  let done = 0;
+  let failed = 0;
+  const investigationIds: string[] = [];
+
+  const runOne = async (unit: typeof queued[number]) => {
+    await pipelineStore.updateUnit(unit.id, {
+      state: 'running',
+      startedAt: Date.now(),
+    });
+
+    try {
+      const query = PHASE_QUERIES.investigate(unit);
+      const investigation = await investigateRunner.run({
+        jobId: ctx.job.id,
+        phase: 'investigate',
+        query,
+        unitId: unit.id,
+        maxIterations: 30,
+        onStep: (step) => { try { ctx.onStep?.('investigate', step); } catch {} },
+      });
+
+      await pipelineStore.updateUnit(unit.id, {
+        state: 'done',
+        finishedAt: Date.now(),
+        sessionId: investigation.dsSessionId,
+      });
+      investigationIds.push(investigation.investigationId);
+      done++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await pipelineStore.updateUnit(unit.id, {
+        state: 'failed',
+        finishedAt: Date.now(),
+        error: msg,
+      });
+      failed++;
+    }
+  };
+
+  // Process in batches of INVESTIGATE_CONCURRENCY
+  for (let i = 0; i < queued.length; i += INVESTIGATE_CONCURRENCY) {
+    const batch = queued.slice(i, i + INVESTIGATE_CONCURRENCY);
+    ctx.emit('investigate', 'running',
+      'batch ' + (Math.floor(i / INVESTIGATE_CONCURRENCY) + 1) +
+      ' (' + batch.length + ' units)');
+    await Promise.all(batch.map(runOne));
+  }
+
+  return done + ' units done, ' + failed + ' failed';
+}
+
+// ── coordinate ──────────────────────────────────────────
+
+interface Remediation {
+  id: string;
+  title: string;
+  target_class: string;
+  rationale: string;
+  expected_effect: string;
+}
+
+async function phaseCoordinate(ctx: PhaseContext): Promise<string> {
+  const units = await pipelineStore.listUnits(ctx.job.id);
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
+
+  if (investigations.length === 0) {
+    throw new Error('no investigations to coordinate');
+  }
+
+  ctx.emit('coordinate', 'start', 'merging ' + investigations.length + ' investigations');
+
+  const fullAnswers: string[] = [];
+  for (const inv of investigations) {
+    const answer = await pipelineStore.getFullAnswer(inv.id);
+    fullAnswers.push(answer || inv.answer_preview || '');
+  }
+
+  const query = PHASE_QUERIES.coordinate(units, fullAnswers);
+  const investigation = await investigateRunner.run({
+    jobId: ctx.job.id,
+    phase: 'coordinate',
+    query,
+    maxIterations: 3,   // pure synthesis, minimal tool use
+    onStep: (step) => { try { ctx.onStep?.('coordinate', step); } catch {} },
+  });
+
+  // Extract remediation JSON from the final answer
+  const remediations = extractJsonArray<Remediation>(investigation.finalAnswer);
+  if (remediations && remediations.length > 0) {
+    await pipelineStore.setJobJson(ctx.job.id, 'plan', remediations);
+    return remediations.length + ' remediations in plan';
+  }
+
+  await pipelineStore.logRawAnswer(ctx.job.id, 'coordinate', investigation.finalAnswer);
+  return 'plan not parseable — logged raw answer';
+}
+
+// ── propose (per remediation) ───────────────────────────
+
+async function phasePropose(ctx: PhaseContext): Promise<string> {
+  const job = ctx.job;
+  const plan = job.planJson ? JSON.parse(job.planJson) as Remediation[] : [];
+  if (!Array.isArray(plan) || plan.length === 0) {
+    throw new Error('no plan — coordinate produced nothing');
+  }
+
+  ctx.emit('propose', 'start', plan.length + ' proposals to draft');
+
+  const investigations = await pipelineStore.listInvestigations(job.id, 200);
+  const findingsContext = investigations
+    .map(i => i.answer_preview || '')
+    .join('\n\n')
+    .slice(0, 8000);
+
+  let done = 0;
+  for (const r of plan) {
+    try {
+      const query = PHASE_QUERIES.propose(r, findingsContext);
+      await investigateRunner.run({
+        jobId: job.id,
+        phase: 'propose',
+        query,
+        maxIterations: 8,
+        onStep: (step) => { try { ctx.onStep?.('propose', step); } catch {} },
+      });
+      done++;
+    } catch (e) {
+      // keep going — one failed proposal shouldn't kill the phase
+      ctx.emit('propose', 'running', 'proposal ' + r.id + ' failed: ' + String(e).slice(0, 100));
+    }
+  }
+
+  return done + '/' + plan.length + ' proposals drafted';
+}
+
+// ── verify ──────────────────────────────────────────────
+
+async function phaseVerify(ctx: PhaseContext): Promise<string> {
+  // Verification in 09b is structural: check every proposed target class
+  // actually exists in the loaded APK. Full payload verification
+  // (offset existence, syntax) lands when we add propose payloads.
+
+  const units = await pipelineStore.listUnits(ctx.job.id);
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
+
+  ctx.emit('verify', 'start', 'checking ' + investigations.length + ' investigations');
+
+  const verified: string[] = [];
+  const failed: string[] = [];
+
+  for (const inv of investigations) {
+    if (inv.phase !== 'propose') continue;
+    const answer = await pipelineStore.getFullAnswer(inv.id);
+    // Look for the target class in the answer
+    const m = answer.match(/\*\*Target:\*\*\s*([A-Za-z0-9_.$]+)/);
+    if (!m) { failed.push(inv.id); continue; }
+
+    const fqcn = m[1];
+    try {
+      const res = await fetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: fqcn.split('.').pop(), limit: 5 }),
+      }).then(r => r.json());
+      if (res.ok && res.matches > 0) {
+        verified.push(inv.id);
+      } else {
+        failed.push(inv.id);
+      }
+    } catch {
+      failed.push(inv.id);
+    }
+  }
+
+  return verified.length + ' verified, ' + failed.length + ' failed';
+}
+
+// ── export ──────────────────────────────────────────────
+
+async function phaseExport(ctx: PhaseContext): Promise<string> {
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
+  const proposeOnes = investigations.filter(i => i.phase === 'propose');
+  if (proposeOnes.length === 0) {
+    throw new Error('no proposals to export');
+  }
+
+  ctx.emit('export', 'start', proposeOnes.length + ' artifacts to produce');
+
+  let done = 0;
+  for (const p of proposeOnes) {
+    try {
+      const proposal = await pipelineStore.getFullAnswer(p.id);
+      const query = PHASE_QUERIES.exportArtifact(proposal, 'see prior investigations');
+      await investigateRunner.run({
+        jobId: ctx.job.id,
+        phase: 'export',
+        query,
+        maxIterations: 4,
+        onStep: (step) => { try { ctx.onStep?.('export', step); } catch {} },
+      });
+      done++;
+    } catch (e) {
+      ctx.emit('export', 'running', 'export ' + p.id + ' failed: ' + String(e).slice(0, 100));
+    }
+  }
+
+  return done + '/' + proposeOnes.length + ' artifacts produced';
+}
+
+// ── audit ───────────────────────────────────────────────
+
+async function phaseAudit(ctx: PhaseContext): Promise<string> {
+  const units = await pipelineStore.listUnits(ctx.job.id);
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 500);
+  const phases = await pipelineStore.getPhases(ctx.job.id);
+
+  const doneUnits = units.filter(u => u.state === 'done').length;
+  const failedUnits = units.filter(u => u.state === 'failed').length;
+  const donePhases = phases.filter(p => p.state === 'done').length;
+  const failedPhases = phases.filter(p => p.state === 'failed').length;
+
+  const summary = [
+    'units: ' + doneUnits + ' done / ' + failedUnits + ' failed / ' + units.length + ' total',
+    'phases: ' + donePhases + ' done / ' + failedPhases + ' failed / ' + phases.length + ' total',
+    'investigations: ' + investigations.length,
+  ].join(' · ');
+
+  ctx.emit('audit', 'start', summary);
+
+  return summary;
 }
 
 // ── orchestrator ────────────────────────────────────────
@@ -262,7 +502,13 @@ export const pipelineRunner = {
         if (phase === 'import')           summary = await phaseImport(ctx);
         else if (phase === 'partition')   summary = await phasePartition(ctx);
         else if (phase === 'dispatch')    summary = await phaseDispatch(ctx);
-        else                              summary = await phaseNotImplemented(ctx, phase);
+        else if (phase === 'investigate') summary = await phaseInvestigate(ctx);
+        else if (phase === 'coordinate')  summary = await phaseCoordinate(ctx);
+        else if (phase === 'propose')     summary = await phasePropose(ctx);
+        else if (phase === 'verify')      summary = await phaseVerify(ctx);
+        else if (phase === 'export')      summary = await phaseExport(ctx);
+        else if (phase === 'audit')       summary = await phaseAudit(ctx);
+        else                              summary = 'unknown phase: ' + phase;
 
         await pipelineStore.finishPhase(jobId, phase, summary);
         outcomes.push({ phase, state: 'done', summary, elapsedMs: Date.now() - t0 });
