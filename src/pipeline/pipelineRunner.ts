@@ -38,7 +38,20 @@ export interface RunResult {
 
 function extractJsonArray<T>(text: string): T[] | null {
   if (!text) return null;
-  // Try direct parse
+
+  // 1. Code fence: ```json [ ... ] ```
+  const fenceMatches = text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g);
+  for (const m of fenceMatches) {
+    const inner = m[1].trim();
+    if (inner.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(inner);
+        if (Array.isArray(parsed)) return parsed as T[];
+      } catch {}
+    }
+  }
+
+  // 2. First `[` and try every matching `]` from longest to shortest.
   const start = text.indexOf('[');
   if (start < 0) return null;
   for (let end = text.length; end > start; end--) {
@@ -46,11 +59,13 @@ function extractJsonArray<T>(text: string): T[] | null {
     const slice = text.slice(start, end);
     try {
       const parsed = JSON.parse(slice);
-      if (Array.isArray(parsed)) return parsed as T[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as T[];
     } catch {}
   }
+
   return null;
 }
+
 
 // ── phase contexts ──────────────────────────────────────
 
@@ -101,29 +116,34 @@ async function phasePartition(ctx: PhaseContext): Promise<string> {
   ctx.emit('partition', 'start', 'agent proposes work units');
 
   const query = [
-    'Call manifest() to get the app package name, permission list, and',
-    'component names (activities, services, receivers, providers).',
+    'Task: propose work units for parallel analysis of this app.',
     '',
-    'Then use find_classes_by_name and find_classes_using_strings to',
-    'discover the top-level package subtrees and vendor SDKs referenced',
-    'by this app. Use the app package from manifest as one seed. Look',
-    'for 4-8 additional seeds by checking common third-party SDK names',
-    'in the manifest (Sentry, Firebase, Adjust, Facebook, LINE, Tencent,',
-    'Google, etc.).',
+    'Step 1 (one call): call manifest(). This gives the app package and',
+    'the full component list. That is your primary evidence.',
     '',
-    'When you have enough evidence, return a final answer that contains',
-    'ONLY a JSON array of unit proposals. Each unit:',
-    '  {"name": "kebab-id", "kind": "app|sdk|component|native|resource",',
-    '   "seed_strings": ["com.app.", "io.sentry."], "why": "one line"}',
+    'Step 2 (up to 3 calls): call find_classes_using_strings once with a',
+    'list of common SDK markers to find which vendors are bundled. Example:',
+    '  ["io.sentry", "com.google.firebase", "com.adjust.sdk",',
+    '   "com.facebook", "com.tencent", "io.flutter"]',
     '',
-    'Aim for 5-12 units. Return the array inside your final answer.',
+    'Step 3: IMMEDIATELY return your final answer. Do not keep probing.',
+    '',
+    'The final answer must contain ONLY a JSON array (no prose around it):',
+    '[{"name":"pubg-app","kind":"app","seed_strings":["com.pubg."],"why":"top-level app package"},',
+    ' {"name":"sentry","kind":"sdk","seed_strings":["io.sentry."],"why":"crash analytics"}]',
+    '',
+    'Rules:',
+    '  • Always include one unit with seed_strings=["<app-package>."] where <app-package> comes from manifest.',
+    '  • One unit per SDK you actually found evidence for.',
+    '  • 4–8 units total.',
+    '  • JSON array only. No explanation text. No code fences.',
   ].join('\n');
 
   const investigation = await investigateRunner.run({
     jobId: ctx.job.id,
     phase: 'partition',
     query,
-    maxIterations: 12,
+    maxIterations: 8,
     onStep: (step) => { try { ctx.onStep?.('partition', step); } catch {} },
   });
 
