@@ -7,6 +7,8 @@ import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
 import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
 import { investigateRunner } from '@/pipeline/investigateRunner';
+import { pipelineRunner } from '@/pipeline/pipelineRunner';
+import type { PhaseId } from '@/pipeline/pipelineRunner';
 import type { AgentStep } from '@/agent/agentLoop';
 import { classLoader } from '@/classdata/classLoader';
 
@@ -102,110 +104,42 @@ export default function JobsTab() {
     if (!path) { Alert.alert('No path'); return; }
     setDirectRunning(true);
     setDirectSteps([]);
-    setDirectStatus('checking file…');
+    setDirectStatus('creating job…');
     try {
-      const probe = await fetch('http://127.0.0.1:8790/executeCommand', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: 'ls', args: ['-la', path], timeoutMs: 5000 }),
-      }).then(r => r.json());
-      if (!probe.ok || probe.result.exitCode !== 0) throw new Error('file not readable: ' + path);
-
       const name = path.split('/').pop() || 'target.apk';
-      setDirectStatus('loading into sidecar…');
-      const load = await fetch('http://127.0.0.1:8790/tools/load', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apk_path: path }),
-      }).then(r => r.json());
-      if (!load.ok) throw new Error('sidecar load failed: ' + (load.error || 'unknown'));
-
-      setDirectStatus('dex=' + load.dex_count + '  pkg=' + load.package + '  v' + load.versionName);
-
       const job = await pipelineStore.createJob({
-        scanId: 'direct-' + Date.now(),
+        scanId: 'pipe-' + Date.now(),
         apkPath: path,
         apkName: name,
-        apkSize: load.apkSize || 0,
+        apkSize: 0,
       });
       await pipelineStore.createPhasesForJob(job.id);
-      await pipelineStore.setJobState(job.id, 'investigating');
-      await pipelineStore.setCurrent(job.id, 'investigate');
 
-      setDirectStatus('investigating via agent…');
-      const investigation = await investigateRunner.run({
-        jobId: job.id,
-        phase: 'partition',
-        query: 'Find every third-party SDK the app links by name (Sentry, Firebase, Adjust, Tencent, Facebook, LINE, etc.). For each SDK, note which class references it.',
-        onStep: (step: AgentStep) => {
+      const result = await pipelineRunner.run(job.id, {
+        stopAfter: 'dispatch' as PhaseId,
+        onPhase: (phase, state, summary) => {
+          setDirectSteps(prev => [...prev, '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
+        },
+        onStep: (phase, step) => {
           const label = step.kind === 'tool'
-            ? '#' + step.iteration + '  tool ' + step.tool + '  (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
+            ? '  ' + phase + ' #' + step.iteration + ' tool ' + step.tool + ' (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
             : step.kind === 'final'
-              ? '#' + step.iteration + '  final'
-              : '#' + step.iteration + '  parse_error';
+              ? '  ' + phase + ' #' + step.iteration + ' final'
+              : '  ' + phase + ' #' + step.iteration + ' parse_error';
           setDirectSteps(prev => [...prev, label]);
         },
       });
 
+      const elapsed = result.finishedAt - result.startedAt;
       setDirectStatus(
-        'done · ' + investigation.toolCallCount + ' tool calls · ' +
-        investigation.totalMs + 'ms · inv=' + investigation.investigationId.slice(0, 8)
+        result.finalState + ' · ' + result.outcomes.length + ' phases · ' + elapsed + 'ms'
       );
-      await pipelineStore.setJobState(job.id, 'done');
-      await pipelineStore.setCurrent(job.id, null);
       await loadJobs();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setDirectStatus('FAIL · ' + msg);
     }
     setDirectRunning(false);
-  };
-
-  const doRun = async () => {
-    if (!selected || running) return;
-    setRunning(true);
-    setLiveSteps([]);
-    setRunStatus('1/3 dumping classes…');
-    try {
-      const scanId = 'job-' + Date.now();
-      const load = await classLoader.load(scanId, selected.path);
-      setRunStatus('2/3 cache=' + load.totalClasses + ' classes. launching investigation…');
-
-      const job = await pipelineStore.createJob({
-        scanId,
-        apkPath: selected.path,
-        apkName: selected.name,
-        apkSize: selected.size,
-      });
-      await pipelineStore.createPhasesForJob(job.id);
-      await pipelineStore.setJobState(job.id, 'queued');
-
-      setRunStatus('3/3 investigating (live)…');
-
-      const investigation = await investigateRunner.run({
-        jobId: job.id,
-        phase: 'partition',
-        query: 'Find every third-party SDK the app links by name (Sentry, Firebase, Adjust, Tencent, Facebook, LINE, etc.). For each SDK, note which class references it.',
-        onStep: (step: AgentStep) => {
-          const label = step.kind === 'tool'
-            ? '#' + step.iteration + '  tool ' + step.tool + '  (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
-            : step.kind === 'final'
-              ? '#' + step.iteration + '  final'
-              : '#' + step.iteration + '  parse_error';
-          setLiveSteps(prev => [...prev, label]);
-        },
-      });
-
-      setRunStatus(
-        'done · ' + investigation.toolCallCount + ' tool calls · ' +
-        investigation.totalMs + 'ms · inv=' + investigation.investigationId.slice(0, 8)
-      );
-      await loadJobs();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setRunStatus('FAIL · ' + msg);
-    }
-    setRunning(false);
   };
 
   return (
@@ -260,7 +194,7 @@ export default function JobsTab() {
         )}
 
         <View style={styles.block}>
-          <Text style={styles.blockLabel}>DIRECT PATH (skip picker)</Text>
+          <Text style={styles.blockLabel}>RUN PIPELINE (import → partition → dispatch)</Text>
           <Text style={styles.help}>
             Reads the file in place via the backend. No copy, no disk needed.
           </Text>
@@ -280,7 +214,7 @@ export default function JobsTab() {
             style={[styles.runBtn, directRunning && { opacity: 0.5 }]}
           >
             <Text style={styles.runBtnText}>
-              {directRunning ? 'RUNNING…' : 'RUN DIRECT'}
+              {directRunning ? 'PIPELINE RUNNING…' : 'RUN PIPELINE'}
             </Text>
           </Pressable>
           {directStatus && (
@@ -301,41 +235,6 @@ export default function JobsTab() {
             </View>
           )}
         </View>
-
-        {selected && (
-          <View style={styles.block}>
-            <Text style={styles.blockLabel}>RUN PIPELINE</Text>
-            <Text style={styles.help}>
-              {selected.name} · {fmtSize(selected.size)}
-            </Text>
-            <Pressable
-              onPress={doRun}
-              disabled={running}
-              style={[styles.runBtn, running && { opacity: 0.5 }]}
-            >
-              <Text style={styles.runBtnText}>
-                {running ? 'RUNNING…' : 'RUN PIPELINE'}
-              </Text>
-            </Pressable>
-            {runStatus && (
-              <Text
-                style={[
-                  styles.statusText,
-                  runStatus.startsWith('FAIL') && { color: colors.danger },
-                ]}
-              >
-                {runStatus}
-              </Text>
-            )}
-            {liveSteps.length > 0 && (
-              <View style={{ marginTop: 8 }}>
-                {liveSteps.map((line, i) => (
-                  <Text key={i} style={styles.stepText}>{line}</Text>
-                ))}
-              </View>
-            )}
-          </View>
-        )}
 
         <View style={styles.block}>
           <Text style={styles.blockLabel}>RECENT JOBS ({jobs.length})</Text>
