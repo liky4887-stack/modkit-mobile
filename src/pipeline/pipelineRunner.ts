@@ -75,28 +75,87 @@ async function releaseWakeLock(): Promise<void> {
 function extractJsonArray<T>(text: string): T[] | null {
   if (!text) return null;
 
-  // 1. Code fence: ```json [ ... ] ```
-  const fenceMatches = text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g);
-  for (const m of fenceMatches) {
-    const inner = m[1].trim();
-    if (inner.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(inner);
-        if (Array.isArray(parsed)) return parsed as T[];
-      } catch {}
+  const tryParse = (raw: string): T[] | null => {
+    const t = raw.trim();
+    if (!t) return null;
+    try {
+      const parsed = JSON.parse(t);
+      if (Array.isArray(parsed)) return parsed as T[];
+      if (typeof parsed === 'object' && parsed !== null) {
+        // Look for the first array-valued key (remediations, proposals, units, items, plan)
+        for (const key of ['remediations', 'proposals', 'units', 'items', 'plan', 'results']) {
+          const v = (parsed as any)[key];
+          if (Array.isArray(v)) return v as T[];
+        }
+        // Single object — wrap it
+        return [parsed as T];
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  // 1. Try every fenced block: ```json, ```, ~~~json, ~~~
+  const fenceRegexes = [
+    /```(?:json|JSON)?\s*([\s\S]*?)```/g,
+    /~~~(?:json|JSON)?\s*([\s\S]*?)~~~/g,
+  ];
+  for (const re of fenceRegexes) {
+    for (const m of text.matchAll(re)) {
+      const r = tryParse(m[1]);
+      if (r && r.length > 0) return r;
     }
   }
 
-  // 2. First `[` and try every matching `]` from longest to shortest.
-  const start = text.indexOf('[');
-  if (start < 0) return null;
-  for (let end = text.length; end > start; end--) {
-    if (text[end - 1] !== ']') continue;
-    const slice = text.slice(start, end);
-    try {
-      const parsed = JSON.parse(slice);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed as T[];
-    } catch {}
+  // 2. Try to find any balanced top-level array in the text
+  const arrStart = text.indexOf('[');
+  if (arrStart >= 0) {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = arrStart; i < text.length; i++) {
+      const c = text[i];
+      if (escape) { escape = false; continue; }
+      if (c === '\\') { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === '[') depth++;
+      else if (c === ']') {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.slice(arrStart, i + 1);
+          const r = tryParse(candidate);
+          if (r && r.length > 0) return r;
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. Try to find any balanced top-level object
+  const objStart = text.indexOf('{');
+  if (objStart >= 0) {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = objStart; i < text.length; i++) {
+      const c = text[i];
+      if (escape) { escape = false; continue; }
+      if (c === '\\') { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.slice(objStart, i + 1);
+          const r = tryParse(candidate);
+          if (r && r.length > 0) return r;
+          break;
+        }
+      }
+    }
   }
 
   return null;

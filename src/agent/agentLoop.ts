@@ -77,6 +77,19 @@ function parseReply(text: string): { kind: 'tool'; tool: string; args: Record<st
   const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) cleaned = fence[1].trim();
 
+  // Fast path: reply does not begin with "{" or a code fence → treat as final.
+  // The agent loop asks for JSON on every turn, but any agent whose task
+  // instruction says "produce a markdown report" will legitimately write
+  // prose. Accept that as the final answer instead of bouncing it.
+  const startsJsonish =
+    cleaned.startsWith('{') ||
+    cleaned.startsWith('```json') ||
+    cleaned.startsWith('```');
+
+  if (!startsJsonish && cleaned.length >= 80) {
+    return { kind: 'final', final: cleaned };
+  }
+
   // Find first { and last }
   const s = cleaned.indexOf('{');
   const e = cleaned.lastIndexOf('}');
