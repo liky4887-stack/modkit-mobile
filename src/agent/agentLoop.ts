@@ -72,46 +72,40 @@ function parseReply(text: string): { kind: 'tool'; tool: string; args: Record<st
                               | { kind: 'final'; final: string }
                               | { kind: 'parse_error'; raw: string } {
   const trimmed = (text || '').trim();
-  // Strip markdown fences if present
+  if (!trimmed) return { kind: 'parse_error', raw: '' };
+
+  // Strip an outer code fence if the ENTIRE reply is wrapped in one.
+  // Accept any language tag (json, markdown, md, javascript, or none).
   let cleaned = trimmed;
-  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  if (fence) cleaned = fence[1].trim();
+  const fenceOuter = cleaned.match(/^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n```\s*$/);
+  if (fenceOuter) cleaned = fenceOuter[1].trim();
 
-  // Fast path: reply does not begin with "{" or a code fence → treat as final.
-  // The agent loop asks for JSON on every turn, but any agent whose task
-  // instruction says "produce a markdown report" will legitimately write
-  // prose. Accept that as the final answer instead of bouncing it.
-  const startsJsonish =
-    cleaned.startsWith('{') ||
-    cleaned.startsWith('```json') ||
-    cleaned.startsWith('```');
-
-  if (!startsJsonish && cleaned.length >= 80) {
-    return { kind: 'final', final: cleaned };
+  // Look for a JSON object anywhere in the reply. If we find one that
+  // contains a valid {"tool": ...} or {"final": ...} shape, use it.
+  // Otherwise, the whole reply is the final answer.
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace >= 0) {
+    // Try every closing brace position from the end
+    for (let end = cleaned.length; end > firstBrace; end--) {
+      if (cleaned[end - 1] !== '}') continue;
+      const slice = cleaned.slice(firstBrace, end);
+      try {
+        const obj = JSON.parse(slice);
+        if (obj && typeof obj === 'object') {
+          if (typeof obj.final === 'string') return { kind: 'final', final: obj.final };
+          if (typeof obj.tool === 'string' && isValidTool(obj.tool)) {
+            return { kind: 'tool', tool: obj.tool, args: obj.args || {} };
+          }
+        }
+      } catch {}
+    }
   }
 
-  // Find first { and last }
-  const s = cleaned.indexOf('{');
-  const e = cleaned.lastIndexOf('}');
-  if (s < 0 || e <= s) return { kind: 'parse_error', raw: cleaned.slice(0, 400) };
-
-  let obj: any;
-  try { obj = JSON.parse(cleaned.slice(s, e + 1)); }
-  catch { return { kind: 'parse_error', raw: cleaned.slice(0, 400) }; }
-
-  if (typeof obj.final === 'string') return { kind: 'final', final: obj.final };
-  if (typeof obj.tool === 'string' && isValidTool(obj.tool)) {
-    return { kind: 'tool', tool: obj.tool, args: obj.args || {} };
-  }
-  // JSON object but neither shape — fall through to plain-text
-  return { kind: 'parse_error', raw: JSON.stringify(obj).slice(0, 400) };
+  // No JSON tool call found — the entire reply is the final answer.
+  return { kind: 'final', final: trimmed };
 }
 
-// Heuristic: is this reply a finished report, or a malformed attempt?
-// A finished report typically:
-//   - is longer than 200 chars
-//   - does not start with `{` after trimming
-//   - contains at least one markdown heading or code-fence marker
+
 function looksLikeFinalReport(text: string): boolean {
   const t = (text || '').trim();
   if (t.length < 120) return false;
