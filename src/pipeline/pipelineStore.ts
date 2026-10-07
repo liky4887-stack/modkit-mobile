@@ -331,4 +331,60 @@ export const pipelineStore = {
       `UPDATE pipeline_units SET ${fields.join(', ')} WHERE id = ?`, args
     );
   },
+  // ── Investigations ──────────────────────────────────────────
+  async listInvestigations(jobId: string, limit = 100): Promise<any[]> {
+    const db = await getDb();
+    return db.getAllAsync<any>(
+      `SELECT id, unit_id, phase, query, tool_call_count, total_ms,
+              substr(final_answer, 1, 400) AS answer_preview, created_at
+         FROM finding_investigations
+         WHERE job_id = ?
+         ORDER BY created_at ASC LIMIT ?`,
+      [jobId, limit]
+    );
+  },
+
+  async getInvestigation(id: string): Promise<any | null> {
+    const db = await getDb();
+    return db.getFirstAsync<any>(
+      `SELECT * FROM finding_investigations WHERE id = ?`, [id]
+    );
+  },
+
+  async getFullAnswer(id: string): Promise<string> {
+    const db = await getDb();
+    const r = await db.getFirstAsync<{ final_answer: string }>(
+      `SELECT final_answer FROM finding_investigations WHERE id = ?`, [id]
+    );
+    return r?.final_answer ?? '';
+  },
+
+  // ── Agent steps (for the UI step trace) ─────────────────────
+  async listAgentSteps(jobId: string, limit = 500): Promise<any[]> {
+    const db = await getDb();
+    return db.getAllAsync<any>(
+      `SELECT iteration, phase, kind, tool, result_chars, elapsed_ms, ts
+         FROM agent_steps
+         WHERE job_id = ?
+         ORDER BY id ASC LIMIT ?`,
+      [jobId, limit]
+    );
+  },
+
+  // ── Job-level raw final answer log (for parse-fail diagnostics) ──
+  async logRawAnswer(jobId: string, phase: string, raw: string): Promise<void> {
+    try {
+      const db = await getDb();
+      await db.runAsync(
+        `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
+         VALUES (?,?,?,?,?,?,?)`,
+        [
+          Date.now(), jobId, phase, 'orchestration_logs', 'warn',
+          'raw_answer_unparseable',
+          JSON.stringify({ chars: raw.length, preview: raw.slice(0, 600) }),
+        ]
+      );
+    } catch {}
+  },
+
 };
