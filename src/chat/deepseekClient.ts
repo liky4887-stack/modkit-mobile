@@ -185,7 +185,6 @@ export const deepseekClient = {
         const content = json.response.data.content ?? '';
         const dsSessionId = json.response.data.chat_session_id ?? null;
 
-        console.log('[DS] turn attempt=' + attempt + ' contentLen=' + content.length + ' sid=' + (dsSessionId || 'none') + ' preview=' + JSON.stringify(content.slice(0, 120)));
 
         // Empty content on 200 is the signature of the cookie bridge
         // losing a race against a concurrent call. Retry once.
