@@ -156,6 +156,8 @@ export const agentLoop = {
     let dsSessionId: string | null = null;
     let final = '';
 
+    let consecutiveParseErrors = 0;
+
     for (let i = 0; i < maxIter; i++) {
       const iterStart = Date.now();
 
@@ -202,11 +204,17 @@ export const agentLoop = {
       }
 
       if (parsed.kind === 'parse_error') {
-        // Before treating as failure, check: does the raw reply look like a
-        // finished report? The investigate/coordinate prompts ask for
-        // markdown, not JSON. Accept that as final.
         const rawText = (r.content || '').trim();
-        if (looksLikeFinalReport(rawText)) {
+
+        // Rule 1: if the reply is clearly NOT a JSON attempt, accept it
+        // as the final answer. Markdown reports, prose summaries, and
+        // anything that doesn't start with "{" or a code fence are final.
+        const looksJsonish =
+          rawText.startsWith('{') ||
+          rawText.startsWith('```json') ||
+          rawText.startsWith('```');
+
+        if (!looksJsonish && rawText.length >= 40) {
           const finalStep: AgentStep = {
             iteration: i, kind: 'final', final: rawText,
             elapsedMs: Date.now() - iterStart,
@@ -216,19 +224,43 @@ export const agentLoop = {
           final = rawText;
           break;
         }
+
+        // Rule 2: track consecutive parse errors, force final after 3
+        consecutiveParseErrors++;
         const errStep: AgentStep = { iteration: i, kind: 'parse_error', raw: parsed.raw, elapsedMs: Date.now() - iterStart };
         steps.push(errStep);
         try { args.onStep?.(errStep); } catch {}
+
+        if (consecutiveParseErrors >= 3) {
+          // Bail out with what we have
+          const forcedFinal =
+            'Reached 3 consecutive unparseable replies. Partial findings:\n\n' +
+            steps
+              .filter(x => x.kind === 'tool')
+              .slice(-5)
+              .map(x => '- ' + x.tool + ': ' + (x.resultPreview || '').slice(0, 200))
+              .join('\n');
+          const finalStep: AgentStep = {
+            iteration: i, kind: 'final', final: forcedFinal,
+            elapsedMs: Date.now() - iterStart,
+          };
+          steps.push(finalStep);
+          try { args.onStep?.(finalStep); } catch {}
+          final = forcedFinal;
+          break;
+        }
+
         transcript.push('ASSISTANT (unparseable):');
-        transcript.push(parsed.raw.slice(0, 400));
+        transcript.push(parsed.raw.slice(0, 200));
         transcript.push('');
-        transcript.push('Your previous reply could not be parsed as JSON. Reply with ONE JSON object only:');
+        transcript.push('Your previous reply could not be parsed. Reply with ONE JSON object only:');
         transcript.push('  {"tool":"<method>","args":{...}}  OR  {"final":"<markdown report>"}');
         transcript.push('');
         continue;
       }
 
       // Tool call
+      consecutiveParseErrors = 0;
       const toolName = parsed.tool;
       const toolArgs = parsed.args || {};
 

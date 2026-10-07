@@ -361,41 +361,98 @@ async function phasePropose(ctx: PhaseContext): Promise<string> {
 // ── verify ──────────────────────────────────────────────
 
 async function phaseVerify(ctx: PhaseContext): Promise<string> {
-  // Verification in 09b is structural: check every proposed target class
-  // actually exists in the loaded APK. Full payload verification
-  // (offset existence, syntax) lands when we add propose payloads.
+  // Structural verification: every proposal's target class must actually
+  // exist in the loaded APK. We extract target names via multiple regex
+  // patterns so we don't depend on exactly how DeepSeek formatted them.
 
-  const units = await pipelineStore.listUnits(ctx.job.id);
   const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
+  const proposes = investigations.filter(i => i.phase === 'propose');
+  if (proposes.length === 0) {
+    return 'no proposals to verify';
+  }
 
-  ctx.emit('verify', 'start', 'checking ' + investigations.length + ' investigations');
+  // Fall back list: the coordinate plan holds target_class for every
+  // remediation, in case the propose answer is unparseable.
+  const job = await pipelineStore.getJob(ctx.job.id);
+  const plan: Remediation[] = job?.planJson ? JSON.parse(job.planJson) : [];
+
+  ctx.emit('verify', 'start', 'checking ' + proposes.length + ' proposals');
 
   const verified: string[] = [];
-  const failed: string[] = [];
+  const failed: { id: string; reason: string }[] = [];
 
-  for (const inv of investigations) {
-    if (inv.phase !== 'propose') continue;
-    const answer = await pipelineStore.getFullAnswer(inv.id);
-    // Look for the target class in the answer
-    const m = answer.match(/\*\*Target:\*\*\s*([A-Za-z0-9_.$]+)/);
-    if (!m) { failed.push(inv.id); continue; }
+  const tryExtractTarget = (answer: string): string | null => {
+    const patterns = [
+      /\*\*Target:\*\*\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /Target:\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /^###\s*Target\s*\n\s*([A-Za-z][A-Za-z0-9_.$]+)/im,
+      /target_class[":\s]+([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /class\s+`([A-Za-z][A-Za-z0-9_.$]+)`/i,
+      /class\s+([A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_.$]*)/,
+    ];
+    for (const re of patterns) {
+      const m = answer.match(re);
+      if (m && m[1]) return m[1];
+    }
+    return null;
+  };
 
-    const fqcn = m[1];
-    try {
-      const res = await fetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: fqcn.split('.').pop(), limit: 5 }),
-      }).then(r => r.json());
-      if (res.ok && res.matches > 0) {
-        verified.push(inv.id);
-      } else {
-        failed.push(inv.id);
-      }
-    } catch {
-      failed.push(inv.id);
+  const checkClassExists = async (fqcn: string): Promise<boolean> => {
+    const simple = fqcn.split('.').pop() || fqcn;
+    const search = fqcn.replace(/\./g, '/').replace(/^L?/, 'L').replace(/;?$/, ';');
+    // Try both the full descriptor and the simple name
+    for (const q of [search, simple]) {
+      try {
+        const r = await fetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: q, limit: 5 }),
+        }).then(x => x.json());
+        if (r.ok && r.matches > 0) return true;
+      } catch {}
+    }
+    return false;
+  };
+
+  for (let idx = 0; idx < proposes.length; idx++) {
+    const p = proposes[idx];
+    const answer = await pipelineStore.getFullAnswer(p.id);
+
+    let target = tryExtractTarget(answer);
+    if (!target && plan[idx] && plan[idx].target_class) {
+      target = plan[idx].target_class;
+    }
+
+    if (!target) {
+      failed.push({ id: p.id, reason: 'no target class extractable' });
+      continue;
+    }
+
+    const exists = await checkClassExists(target);
+    if (exists) {
+      verified.push(target);
+    } else {
+      failed.push({ id: p.id, reason: 'class not found: ' + target });
     }
   }
+
+  // Persist a verification log
+  try {
+    const db = await (await import('@/db/client')).getDb();
+    await db.runAsync(
+      `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        Date.now(), ctx.job.id, 'verify', 'orchestration_logs', 'info',
+        'verify_complete',
+        JSON.stringify({
+          verified: verified.length,
+          failed: failed.length,
+          failures: failed.slice(0, 5),
+        }),
+      ]
+    );
+  } catch {}
 
   return verified.length + ' verified, ' + failed.length + ' failed';
 }
