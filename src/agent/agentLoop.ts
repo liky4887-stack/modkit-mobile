@@ -90,7 +90,25 @@ function parseReply(text: string): { kind: 'tool'; tool: string; args: Record<st
   if (typeof obj.tool === 'string' && isValidTool(obj.tool)) {
     return { kind: 'tool', tool: obj.tool, args: obj.args || {} };
   }
+  // JSON object but neither shape — fall through to plain-text
   return { kind: 'parse_error', raw: JSON.stringify(obj).slice(0, 400) };
+}
+
+// Heuristic: is this reply a finished report, or a malformed attempt?
+// A finished report typically:
+//   - is longer than 200 chars
+//   - does not start with `{` after trimming
+//   - contains at least one markdown heading or code-fence marker
+function looksLikeFinalReport(text: string): boolean {
+  const t = (text || '').trim();
+  if (t.length < 120) return false;
+  if (t.startsWith('{') && t.endsWith('}')) return false;
+  if (t.startsWith('```json') && t.endsWith('```')) return false;
+  // Contains markdown structure
+  if (/^#+\s/m.test(t)) return true;
+  if (/\*\*[^*]+\*\*:/.test(t)) return true;
+  if (/^[-*]\s/m.test(t) && t.includes('\n')) return true;
+  return false;
 }
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -184,6 +202,20 @@ export const agentLoop = {
       }
 
       if (parsed.kind === 'parse_error') {
+        // Before treating as failure, check: does the raw reply look like a
+        // finished report? The investigate/coordinate prompts ask for
+        // markdown, not JSON. Accept that as final.
+        const rawText = (r.content || '').trim();
+        if (looksLikeFinalReport(rawText)) {
+          const finalStep: AgentStep = {
+            iteration: i, kind: 'final', final: rawText,
+            elapsedMs: Date.now() - iterStart,
+          };
+          steps.push(finalStep);
+          try { args.onStep?.(finalStep); } catch {}
+          final = rawText;
+          break;
+        }
         const errStep: AgentStep = { iteration: i, kind: 'parse_error', raw: parsed.raw, elapsedMs: Date.now() - iterStart };
         steps.push(errStep);
         try { args.onStep?.(errStep); } catch {}

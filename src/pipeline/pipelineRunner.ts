@@ -321,7 +321,9 @@ async function phaseCoordinate(ctx: PhaseContext): Promise<string> {
 // ── propose (per remediation) ───────────────────────────
 
 async function phasePropose(ctx: PhaseContext): Promise<string> {
-  const job = ctx.job;
+  // Re-fetch — coordinate may have written plan_json earlier in this run
+  const job = await pipelineStore.getJob(ctx.job.id);
+  if (!job) throw new Error('job disappeared: ' + ctx.job.id);
   const plan = job.planJson ? JSON.parse(job.planJson) as Remediation[] : [];
   if (!Array.isArray(plan) || plan.length === 0) {
     throw new Error('no plan — coordinate produced nothing');
