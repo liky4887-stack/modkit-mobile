@@ -179,6 +179,23 @@ export const deepseekClient = {
         const content = json.response.data.content ?? '';
         const dsSessionId = json.response.data.chat_session_id ?? null;
 
+        // Empty content on 200 is the signature of the cookie bridge
+        // losing a race against a concurrent call. Retry once.
+        if (content.trim().length === 0 && attempt < maxRetries) {
+          httpLog.record({
+            method: 'POST',
+            url: CHAT_URL,
+            reqPreview: '(empty reply)',
+            resStatus: 200,
+            resPreview: '',
+            durationMs: elapsedMs,
+            error: 'empty reply — retrying',
+          });
+          await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 1000)));
+          retries = attempt + 1;
+          continue;
+        }
+
         await chatRegistry.appendTurn({
           chatId: chat.id,
           jobId: opts.jobId ?? null,

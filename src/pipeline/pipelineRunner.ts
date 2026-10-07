@@ -304,7 +304,11 @@ async function phaseDispatch(ctx: PhaseContext): Promise<string> {
 
 // ── investigate (per unit, rate-limited parallelism) ────
 
-const INVESTIGATE_CONCURRENCY = 3;
+// The cookie bridge to chat.deepseek.com serves one conversation at a
+// time. Firing N parallel calls on the same bearer returns empty replies
+// for all but one. Keep this at 1 until we have distinct bearer tokens
+// or an upstream queue.
+const INVESTIGATE_CONCURRENCY = 1;
 
 async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
   const units = await pipelineStore.listUnits(ctx.job.id);
