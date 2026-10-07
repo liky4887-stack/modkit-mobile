@@ -37,6 +37,41 @@ export interface RunResult {
 
 // ── helpers ─────────────────────────────────────────────
 
+// ── wake lock (Android Doze will suspend Termux mid-pipeline) ───
+// Uses termux-wake-lock via the backend to keep the CPU alive during
+// long agent runs. Released on completion.
+
+async function acquireWakeLock(reason: string): Promise<boolean> {
+  try {
+    const r = await fetch('http://127.0.0.1:8790/executeCommand', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        command: 'termux-wake-lock',
+        args: [],
+        timeoutMs: 5000,
+      }),
+    }).then(x => x.json());
+    return r.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseWakeLock(): Promise<void> {
+  try {
+    await fetch('http://127.0.0.1:8790/executeCommand', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        command: 'termux-wake-unlock',
+        args: [],
+        timeoutMs: 5000,
+      }),
+    });
+  } catch {}
+}
+
 function extractJsonArray<T>(text: string): T[] | null {
   if (!text) return null;
 
@@ -519,6 +554,9 @@ export const pipelineRunner = {
     const startedAt = Date.now();
     const outcomes: PhaseOutcome[] = [];
 
+    // Hold wake lock — prevents Android from suspending Termux mid-run
+    await acquireWakeLock('pipeline:' + jobId);
+
     const job = await pipelineStore.getJob(jobId);
     if (!job) throw new Error('job not found: ' + jobId);
 
@@ -579,6 +617,7 @@ export const pipelineRunner = {
         emit(phase, 'failed', msg);
 
         await pipelineStore.setJobState(jobId, 'failed', msg);
+        await releaseWakeLock();
         return {
           jobId,
           startedAt,
@@ -592,6 +631,7 @@ export const pipelineRunner = {
 
     await pipelineStore.setCurrent(jobId, null);
     await pipelineStore.setJobState(jobId, 'done');
+    await releaseWakeLock();
 
     return {
       jobId,
