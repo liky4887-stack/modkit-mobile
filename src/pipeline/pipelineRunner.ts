@@ -72,6 +72,27 @@ async function releaseWakeLock(): Promise<void> {
   } catch {}
 }
 
+async function sha256Hex(text: string): Promise<string> {
+  try {
+    const { digestStringAsync, CryptoDigestAlgorithm } = await import('expo-crypto');
+    return await digestStringAsync(CryptoDigestAlgorithm.SHA256, text);
+  } catch {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) {
+      h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+    }
+    return 'fallback-' + (h >>> 0).toString(16);
+  }
+}
+
+function slugify(s: string): string {
+  return (s || 'artifact')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'artifact';
+}
+
 function extractJsonArray<T>(text: string): T[] | null {
   if (!text) return null;
 
@@ -575,33 +596,88 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
 // ── export ──────────────────────────────────────────────
 
 async function phaseExport(ctx: PhaseContext): Promise<string> {
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
-  const proposeOnes = investigations.filter(i => i.phase === 'propose');
-  if (proposeOnes.length === 0) {
-    throw new Error('no proposals to export');
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 500);
+
+  const candidates = investigations.filter(i =>
+    i.phase === 'propose' || i.phase === 'coordinate' || i.phase === 'investigate'
+  );
+
+  if (candidates.length === 0) {
+    throw new Error('no investigations to export');
   }
 
-  ctx.emit('export', 'start', proposeOnes.length + ' artifacts to produce');
+  ctx.emit('export', 'start', candidates.length + ' artifacts to produce');
 
+  const outDir = '/storage/emulated/0/Download/modkit-artifacts/' + ctx.job.id;
   let done = 0;
-  for (const p of proposeOnes) {
+  let bytes = 0;
+  const failures: string[] = [];
+
+  for (const c of candidates) {
     try {
-      const proposal = await pipelineStore.getFullAnswer(p.id);
-      const query = PHASE_QUERIES.exportArtifact(proposal, 'see prior investigations');
-      await investigateRunner.run({
-        jobId: ctx.job.id,
-        phase: 'export',
-        query,
-        maxIterations: 4,
-        onStep: (step) => { try { ctx.onStep?.('export', step); } catch {} },
-      });
+      const answer = await pipelineStore.getFullAnswer(c.id);
+      if (!answer || answer.length < 40) {
+        failures.push(c.id);
+        continue;
+      }
+
+      const title = (c.query || '').split('\n')[0].slice(0, 80) || (c.phase + ' ' + c.id.slice(0, 6));
+      const filename = c.phase + '-' + c.id.slice(0, 6) + '-' + slugify(title) + '.md';
+      const filePath = outDir + '/' + filename;
+
+      const body = [
+        '# ' + title,
+        '',
+        '**Job:** ' + ctx.job.id,
+        '**Phase:** ' + c.phase,
+        '**Investigation:** ' + c.id,
+        '**Tool calls:** ' + (c.tool_call_count ?? 0),
+        '**Duration:** ' + (c.total_ms ?? 0) + ' ms',
+        '',
+        '---',
+        '',
+        answer,
+      ].join('\n');
+
+      const sha = await sha256Hex(body);
+
+      const res = await fetch('http://127.0.0.1:8790/file/write', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: filePath, content: body }),
+      }).then(r => r.json());
+
+      if (!res.ok) {
+        failures.push(c.id + ':' + (res.error || 'write_failed'));
+        continue;
+      }
+
+      const { getDb } = await import('@/db/client');
+      const db = await getDb();
+      const artifactId = 'art_' + Math.random().toString(36).slice(2, 12);
+      await db.runAsync(
+        `INSERT INTO finding_artifacts
+           (id, job_id, investigation_id, phase, title, kind, file_path, size_bytes, sha256, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [
+          artifactId, ctx.job.id, c.id, c.phase, title, 'markdown',
+          filePath, body.length, sha, Date.now(),
+        ]
+      );
+
       done++;
+      bytes += body.length;
+
+      ctx.emit('export', 'running', filename + ' (' + body.length + 'B)');
     } catch (e) {
-      ctx.emit('export', 'running', 'export ' + p.id + ' failed: ' + String(e).slice(0, 100));
+      failures.push(c.id + ':' + String(e).slice(0, 60));
     }
   }
 
-  return done + '/' + proposeOnes.length + ' artifacts produced';
+  const failNote = failures.length > 0
+    ? ' · ' + failures.length + ' failed'
+    : '';
+  return done + ' artifacts (' + bytes + ' bytes) → ' + outDir + failNote;
 }
 
 // ── audit ───────────────────────────────────────────────

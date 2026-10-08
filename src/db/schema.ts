@@ -1,3 +1,4 @@
+import { MIGRATION_V13 } from './migrations/v13_artifacts';
 import { MIGRATION_V12 } from './migrations/v12_agent';
 import { MIGRATION_V11 } from './migrations/v11_classdata';
 import { MIGRATION_V10 } from './migrations/v10_chats';
@@ -7,7 +8,7 @@ import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 export const DB_NAME = 'modkit-v2.db';
 
 export interface ScanRecord {
@@ -252,4 +253,6 @@ export const MIGRATIONS: string[][] = [
   [MIGRATION_V11],
   // v12 — agent integration
   [MIGRATION_V12],
+  // v13 — pipeline artifacts
+  [MIGRATION_V13],
 ];
