@@ -92,21 +92,47 @@ export default function SystemTab() {
   const dumpHttpToDisk = useCallback(async () => {
     try {
       const db = await SQLite.openDatabaseAsync('modkit-v2.db');
-      const rows = await db.getAllAsync<any>(
-        `SELECT id, ts, method, url, path, req_preview, res_status, res_preview,
-                duration_ms, error
-           FROM http_log
-           ORDER BY id DESC LIMIT 300`
-      );
-      const json = JSON.stringify(rows, null, 2);
-      const path = '/storage/emulated/0/Download/modkit-dumps/http-log-' + Date.now() + '.json';
+
+      const tables = [
+        'pipeline_jobs',
+        'pipeline_phases',
+        'pipeline_units',
+        'finding_investigations',
+        'agent_steps',
+        'finding_artifacts',
+        'pipeline_chats',
+        'event_log',
+        'http_log',
+      ];
+
+      const bundle: Record<string, any[]> = {};
+      let totalRows = 0;
+      for (const t of tables) {
+        try {
+          const rows = await db.getAllAsync<any>(
+            `SELECT * FROM ${t} ORDER BY rowid DESC LIMIT 500`
+          );
+          bundle[t] = rows;
+          totalRows += rows.length;
+        } catch (e) {
+          bundle[t] = [{ __error: String(e) }];
+        }
+      }
+
+      const json = JSON.stringify({
+        exportedAt: Date.now(),
+        tables: bundle,
+      }, null, 2);
+
+      const path = '/storage/emulated/0/Download/modkit-dumps/db-dump-' + Date.now() + '.json';
       const res = await fetch('http://127.0.0.1:8790/file/write', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path, content: json }),
       }).then(r => r.json());
+
       if (res.ok) {
-        setTestResult('DUMP OK · ' + rows.length + ' rows → ' + path);
+        setTestResult('DUMP OK · ' + tables.length + ' tables · ' + totalRows + ' rows → ' + path);
       } else {
         setTestResult('DUMP FAIL · ' + (res.error || 'unknown'));
       }
@@ -247,7 +273,7 @@ export default function SystemTab() {
             onPress={dumpHttpToDisk}
             style={[styles.testBtn, { marginTop: 6 }]}
           >
-            <Text style={styles.testBtnText}>DUMP HTTP LOG</Text>
+            <Text style={styles.testBtnText}>DUMP DB + LOGS</Text>
           </Pressable>
           {testResult && (
             <Text style={[styles.blockMeta, { marginTop: 8, color: testResult.startsWith('OK') ? colors.accent : colors.danger }]}>

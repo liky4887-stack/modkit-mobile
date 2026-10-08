@@ -554,6 +554,27 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
     const p = proposes[idx];
     const answer = await pipelineStore.getFullAnswer(p.id);
 
+    // Log raw propose answer to event_log so extraction failures are
+    // diagnosable without a shell into the app's SQLite sandbox.
+    try {
+      const db = await (await import('@/db/client')).getDb();
+      await db.runAsync(
+        `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
+         VALUES (?,?,?,?,?,?,?)`,
+        [
+          Date.now(), ctx.job.id, 'verify', 'orchestration_logs', 'info',
+          'verify_propose_raw',
+          JSON.stringify({
+            investigation_id: p.id,
+            length: answer.length,
+            first600: answer.slice(0, 600),
+            hasTargetMarker: /target/i.test(answer),
+            hasClassWord: /class/i.test(answer),
+          }),
+        ]
+      );
+    } catch {}
+
     let target = tryExtractTarget(answer);
     if (!target && plan[idx] && plan[idx].target_class) {
       target = plan[idx].target_class;
