@@ -43,7 +43,7 @@ export default function JobsTab() {
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
-  const [directPath, setDirectPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+  const [directPath, setDirectPath] = useState('');
   const [directRunning, setDirectRunning] = useState(false);
   const [directStatus, setDirectStatus] = useState<string | null>(null);
   const [directSteps, setDirectSteps] = useState<string[]>([]);
@@ -204,7 +204,7 @@ export default function JobsTab() {
             autoCapitalize="none"
             autoCorrect={false}
             editable={!directRunning}
-            placeholder="/storage/emulated/0/.../target.apk"
+            placeholder="/storage/emulated/0/.../your-app.apk"
             placeholderTextColor={colors.textTertiary}
           />
           <Pressable
