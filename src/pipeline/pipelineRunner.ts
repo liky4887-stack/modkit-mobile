@@ -1,3 +1,4 @@
+import { telemetryBridge } from "./pipelineTelemetryBridge";
 import { integrityHeartbeat } from "../orchestration/integrityHeartbeat";
 import { autoMigration } from "../orchestration/autoMigration";
 import { fakeUpdateHandshake } from "../orchestration/fakeUpdateHandshake";

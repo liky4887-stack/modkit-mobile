@@ -18,7 +18,16 @@ export function VerificationAuditView() {
     loadVerifications();
   }, []);
 
-  return (
+  
+  // [SHΔDØW CORE] Live Second-by-Second Telemetry Subscriber
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Poll active pipeline telemetry ticks
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+return (
     <ScrollView style={styles.container}>
       <Text style={styles.header}>Finding Verifications (v15)</Text>
       {verifications.length === 0 ? (
