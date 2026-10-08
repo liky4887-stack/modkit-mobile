@@ -518,18 +518,41 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
   const failed: { id: string; reason: string }[] = [];
 
   const tryExtractTarget = (answer: string): string | null => {
-    const patterns = [
+    // Strategy 1: explicit markers (Target:, ### Target, target_class, etc.)
+    const explicitPatterns = [
       /\*\*Target:\*\*\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /Target:\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /^###\s*Target\s*\n\s*([A-Za-z][A-Za-z0-9_.$]+)/im,
-      /target_class[":\s]+([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /\*\*Target class:\*\*\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /Target class[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /Target[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
+      /^###\s*Target\s*\n\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/im,
+      /target_class["\':\s]+([A-Za-z][A-Za-z0-9_.$]+)/i,
       /class\s+`([A-Za-z][A-Za-z0-9_.$]+)`/i,
-      /class\s+([A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_.$]*)/,
+      /Affected class[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
     ];
-    for (const re of patterns) {
+    for (const re of explicitPatterns) {
       const m = answer.match(re);
-      if (m && m[1]) return m[1];
+      if (m && m[1] && m[1].length > 4) return m[1];
     }
+
+    // Strategy 2: find every dotted identifier that looks like a Java
+    // class (contains at least one dot, no spaces, length > 6, ends with
+    // an uppercase-starting segment). Return the first one that has a
+    // lowercase package prefix.
+    const tokens = answer.match(/\b[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*\.[A-Z][A-Za-z0-9_$]*\b/g) || [];
+    const seen = new Set<string>();
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      // Skip obvious non-targets
+      if (t.startsWith('android.') || t.startsWith('java.') ||
+          t.startsWith('kotlin.') || t.startsWith('javax.') ||
+          t.startsWith('org.intellij.') || t.startsWith('org.jetbrains.')) {
+        continue;
+      }
+      if (t.length < 8) continue;
+      return t;
+    }
+
     return null;
   };
 
@@ -605,12 +628,15 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
         JSON.stringify({
           verified: verified.length,
           failed: failed.length,
-          failures: failed.slice(0, 5),
+          failure_reasons: failed.slice(0, 5),
+          verified_targets: verified.slice(0, 10),
         }),
       ]
     );
   } catch {}
 
+  // If nothing verified, don't fail the phase — record it and move on.
+  // Export and audit will report the empty result downstream.
   return verified.length + ' verified, ' + failed.length + ' failed';
 }
 
