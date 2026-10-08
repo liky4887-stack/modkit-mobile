@@ -164,6 +164,37 @@ function looksLikeFinalReport(text: string): boolean {
   return false;
 }
 
+async function recordPromptVersion(scope: string, version: string, body: string): Promise<void> {
+  try {
+    const { getDb } = await import('@/db/client');
+    const db = await getDb();
+
+    // Simple deterministic hash (FNV-1a 32-bit as hex)
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < body.length; i++) {
+      h ^= body.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    const hash = h.toString(16).padStart(8, '0');
+
+    // Only insert if (scope, version) not already present
+    const existing = await db.getFirstAsync<{ id: string }>(
+      `SELECT id FROM prompt_versions WHERE scope = ? AND version = ? LIMIT 1`,
+      [scope, version]
+    );
+    if (existing) return;
+
+    await db.runAsync(
+      `INSERT INTO prompt_versions (id, scope, version, hash, body, first_seen_at)
+       VALUES (?,?,?,?,?,?)`,
+      [
+        'pv_' + Math.random().toString(36).slice(2, 12),
+        scope, version, hash, body.slice(0, 8000), Date.now(),
+      ]
+    );
+  } catch {}
+}
+
 async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   try {
     const r: any = await toolsClient.call(name, args);
@@ -194,6 +225,14 @@ export const agentLoop = {
 
     // Build initial prompt
     const preamble = systemPreamble();
+
+    // Record the preamble once per run so we can correlate prompt
+    // versions with output quality in the events table.
+    try {
+      await recordPromptVersion('agent_preamble', AGENT_PROMPT_VERSION, preamble);
+      await recordPromptVersion('user_query', AGENT_PROMPT_VERSION, args.query);
+    } catch {}
+
     const userBlock = [
       'The user asks:',
       '"' + args.query + '"',

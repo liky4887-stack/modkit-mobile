@@ -9,11 +9,18 @@ import { eventBus } from '@/orchestration/eventBus';
 import { getDb } from '@/db/client';
 import type { AgentStep } from '@/agent/agentLoop';
 import { PHASE_QUERIES } from './phaseQueries';
+import { truthLedger } from '@/orchestration/truthLedger';
+import { progressTracker } from '@/orchestration/progressTracker';
+import { collisionGuard } from '@/orchestration/collisionGuard';
+import { dependencyMapper } from '@/orchestration/dependencyMapper';
 
 export type PhaseId = typeof PHASES_ORDER[number];
 
 export interface RunOptions {
   stopAfter?: PhaseId;
+  /** Force re-run of this phase and everything after it. Phases before
+   *  it are honored from pipeline_phases as usual. */
+  fromPhase?: PhaseId;
   onPhase?: (phase: PhaseId, state: string, summary?: string) => void;
   onStep?: (phase: PhaseId, step: AgentStep) => void;
 }
@@ -221,8 +228,31 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
     [load.apkSize || 0, ctx.job.id]
   );
 
+  // Build dependency graph from class_cache: within each top package,
+  // link consecutive classes as shared_ref edges. Feeds the collision
+  // guard later. Persists to dependency_map.
+  let edgeCount = 0;
+  try {
+    const { classCache } = await import('@/classdata/classCache');
+    const scanId = ctx.job.scanId || ctx.job.id;
+    const topPkgs = await classCache.packageSummary(scanId, 30);
+    for (const pkg of topPkgs) {
+      const rows = await classCache.byPackagePrefix(scanId, pkg.top, 20);
+      for (let i = 0; i < rows.length - 1; i++) {
+        await dependencyMapper.recordEdge(scanId, {
+          source: 'class:' + rows[i].fqcn,
+          target: 'class:' + rows[i + 1].fqcn,
+          type: 'shared_ref',
+          constraints: ['package:' + pkg.top],
+        });
+        edgeCount++;
+      }
+    }
+  } catch {}
+
   return 'pkg=' + load.package + ' v' + load.versionName +
          ' dex=' + load.dex_count + ' perms=' + load.permission_count +
+         ' edges=' + edgeCount +
          ' load=' + load.load_ms + 'ms';
 }
 
@@ -309,6 +339,17 @@ async function phaseDispatch(ctx: PhaseContext): Promise<string> {
       `UPDATE pipeline_units SET state = 'queued' WHERE id = ?`,
       [u.id]
     );
+
+    // Register with progressTracker so completion is weighted by priority
+    try {
+      await progressTracker.upsertSegment({
+        segmentId: u.id,
+        scanId: ctx.job.id,
+        phase: 'investigate' as any,
+        workerId: null as any,
+        tokenBudget: priority,
+      });
+    } catch {}
     await db.runAsync(
       `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
        VALUES (?,?,?,?,?,?,?)`,
@@ -325,11 +366,11 @@ async function phaseDispatch(ctx: PhaseContext): Promise<string> {
 
 // ── investigate (per unit, rate-limited parallelism) ────
 
-// The cookie bridge to chat.deepseek.com serves one conversation at a
-// time. Firing N parallel calls on the same bearer returns empty replies
-// for all but one. Keep this at 1 until we have distinct bearer tokens
-// or an upstream queue.
-const INVESTIGATE_CONCURRENCY = 1;
+// Concurrency is controlled by the global rate limiter. The default is
+// 1 because the cookie bridge to chat.deepseek.com serves one
+// conversation at a time. Raise this via rateLimiter.reconfigure() once
+// we have distinct bearer tokens.
+import { globalRateLimiter } from '@/chat/rateLimiter';
 
 async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
   const units = await pipelineStore.listUnits(ctx.job.id);
@@ -366,6 +407,7 @@ async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
         finishedAt: Date.now(),
         sessionId: investigation.dsSessionId,
       });
+      try { await progressTracker.updateStatus(unit.id, 'completed'); } catch {}
       investigationIds.push(investigation.investigationId);
       done++;
     } catch (e) {
@@ -375,16 +417,18 @@ async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
         finishedAt: Date.now(),
         error: msg,
       });
+      try { await progressTracker.updateStatus(unit.id, 'failed'); } catch {}
       failed++;
     }
   };
 
-  // Process in batches of INVESTIGATE_CONCURRENCY
-  for (let i = 0; i < queued.length; i += INVESTIGATE_CONCURRENCY) {
-    const batch = queued.slice(i, i + INVESTIGATE_CONCURRENCY);
+  // Process in batches sized by the rate limiter's maxConcurrent.
+  const concurrency = Math.max(1, globalRateLimiter.stats().maxConcurrent);
+  for (let i = 0; i < queued.length; i += concurrency) {
+    const batch = queued.slice(i, i + concurrency);
     ctx.emit('investigate', 'running',
-      'batch ' + (Math.floor(i / INVESTIGATE_CONCURRENCY) + 1) +
-      ' (' + batch.length + ' units)');
+      'batch ' + (Math.floor(i / concurrency) + 1) +
+      ' (' + batch.length + ' units, limit ' + concurrency + ')');
     await Promise.all(batch.map(runOne));
   }
 
@@ -507,13 +551,53 @@ async function phasePropose(ctx: PhaseContext): Promise<string> {
   for (const r of plan) {
     try {
       const query = PHASE_QUERIES.propose(r, findingsContext);
-      await investigateRunner.run({
+      const investigation = await investigateRunner.run({
         jobId: job.id,
         phase: 'propose',
         query,
         maxIterations: 8,
         onStep: (step) => { try { ctx.onStep?.('propose', step); } catch {} },
       });
+
+      // Truth ledger: record every proposal with its rationale.
+      try {
+        await truthLedger.record({
+          correlationId: job.id,
+          scanId: job.id,
+          phase: 'propose',
+          sourceSegment: r.id || r.target_class || 'proposal',
+          targetOffsets: [],
+          rationale: r.title || r.rationale || 'propose phase',
+          beforeHash: '',
+          afterHash: '',
+          validationOutcome: 'pending',
+        });
+      } catch {}
+
+      // Collision guard: proposals in the same job that touch the same
+      // target class are conflicts and need arbitration.
+      try {
+        const active = await truthLedger.getByScan(job.id);
+        const seenTargets = new Set<string>();
+        for (const entry of active) {
+          if (entry.source_segment === r.target_class) continue;
+          if (entry.source_segment?.includes(r.target_class || '')) {
+            seenTargets.add(entry.source_segment);
+          }
+        }
+        if (seenTargets.size > 0 && r.target_class) {
+          await collisionGuard.check({
+            scanId: job.id,
+            correlationId: job.id,
+            segmentId: r.target_class,
+            workerId: 'propose-phase',
+            phase: 'propose',
+            offsets: [],
+            safetyScore: 0.5,
+          });
+        }
+      } catch {}
+
       done++;
     } catch (e) {
       // keep going — one failed proposal shouldn't kill the phase
@@ -646,7 +730,69 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
     }
   }
 
-  // Persist a verification log
+  // Persist per-verification rows to finding_verifications.
+  // One row per proposal: target, checks performed, pass/fail.
+  try {
+    const db = await (await import('@/db/client')).getDb();
+    for (let idx = 0; idx < proposes.length; idx++) {
+      const p = proposes[idx];
+      const answer = await pipelineStore.getFullAnswer(p.id);
+      const target = tryExtractTarget(answer) || (plan[idx] && plan[idx].target_class) || null;
+
+      // Check 1: target class exists in the loaded APK
+      const classExists = target ? await checkClassExists(target) : false;
+
+      // Check 2: payload well-formed? (crude syntax check)
+      const hasCode = /\{[\s\S]*\}/.test(answer) || /```/.test(answer);
+      const hasChangeDesc = /change|patch|modif|instrument|config/i.test(answer);
+
+      // Check 3: rationale present
+      const hasRationale = /rationale|why|reason/i.test(answer);
+
+      // Check 4: verification steps present
+      const hasVerifySteps = /verif|confirm|check how/i.test(answer);
+
+      const checks = [
+        { name: 'class_exists', passed: classExists, detail: target || 'no target' },
+        { name: 'has_code_or_fence', passed: hasCode, detail: '' },
+        { name: 'has_change_desc', passed: hasChangeDesc, detail: '' },
+        { name: 'has_rationale', passed: hasRationale, detail: '' },
+        { name: 'has_verify_steps', passed: hasVerifySteps, detail: '' },
+      ];
+
+      const passed = checks.filter(c => c.passed).length;
+      const allPassed = checks.every(c => c.passed);
+      const failures = checks.filter(c => !c.passed).map(c => c.name).join(',');
+
+      await db.runAsync(
+        `INSERT INTO finding_verifications
+           (id, job_id, investigation_id, remediation_id, phase, target_class,
+            checks_json, passed, failure_reasons, self_critique, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          'fv_' + Math.random().toString(36).slice(2, 12),
+          ctx.job.id,
+          p.id,
+          (plan[idx] && plan[idx].id) || null,
+          'verify',
+          target,
+          JSON.stringify(checks),
+          allPassed ? 1 : 0,
+          failures || null,
+          null,
+          Date.now(),
+        ]
+      );
+    }
+  } catch (e) {
+    eventBus.emit({
+      scanId: ctx.job.id, correlationId: ctx.job.id, phase: 'verify' as any,
+      functionId: 'orchestration_logs', severity: 'warn',
+      payload: { action: 'verify_persist_failed', error: String(e) },
+    });
+  }
+
+  // Persist a summary log
   try {
     const db = await (await import('@/db/client')).getDb();
     await db.runAsync(
@@ -660,6 +806,7 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
           failed: failed.length,
           failure_reasons: failed.slice(0, 5),
           verified_targets: verified.slice(0, 10),
+          deep_checks: proposes.length,
         }),
       ]
     );
@@ -905,7 +1052,16 @@ export const pipelineRunner = {
     };
 
     const existing = await pipelineStore.getPhases(jobId);
-    const doneSet = new Set(existing.filter(p => p.state === 'done').map(p => p.phase));
+    let doneSet = new Set(existing.filter(p => p.state === 'done').map(p => p.phase));
+
+    // fromPhase: force re-run of that phase and everything after it
+    if (opts.fromPhase) {
+      const resetIdx = (PHASES_ORDER as readonly string[]).indexOf(opts.fromPhase);
+      if (resetIdx >= 0) {
+        const resetSet = new Set(PHASES_ORDER.slice(resetIdx) as readonly string[]);
+        doneSet = new Set([...doneSet].filter(p => !resetSet.has(p)));
+      }
+    }
 
     const ctx: PhaseContext = { job, emit, onStep: opts.onStep };
 
