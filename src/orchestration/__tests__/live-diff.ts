@@ -1,8 +1,8 @@
 // LIVE test — calls the real Termux backend.
-// Requires ~/start-factory.sh running + PUBG_MOBILE_v2.apk present.
+// Requires ~/start-factory.sh running + SANDBOX_v2.apk present.
 import { binaryDiffViewer } from '../binaryDiffViewer';
 
-const APK = '/data/data/com.termux/files/home/PUBG_MOBILE_v2.apk';
+const APK = '/data/data/com.termux/files/home/SANDBOX_v2.apk';
 const scanId = 'live-diff-' + Date.now();
 
 (async () => {

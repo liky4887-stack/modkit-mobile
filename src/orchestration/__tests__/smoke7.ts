@@ -27,8 +27,8 @@ console.log('temporal just-above (expect adjust):', tJustAbove.action);
 
 // ---------- Contextual Chameleon ----------
 const ctx = {
-  packageName: 'com.pubg.krmobile.engine',
-  parentClasses: ['com.pubg.krmobile.engine.Physics', 'com.pubg.krmobile.engine.Render'],
+  packageName: 'com.sandbox.krmobile.engine',
+  parentClasses: ['com.sandbox.krmobile.engine.Physics', 'com.sandbox.krmobile.engine.Render'],
   siblingMethods: ['computePhysics()', 'renderFrame()', 'updateState()'],
   calledBy: [],
   calls: [],
@@ -36,7 +36,7 @@ const ctx = {
 };
 
 const cv1 = checkContext(
-  { changeId: 'c1', targetSegment: 'seg', changeKind: 'add_class', proposedContent: 'com.pubg.krmobile.engine.NewPhysics' },
+  { changeId: 'c1', targetSegment: 'seg', changeKind: 'add_class', proposedContent: 'com.sandbox.krmobile.engine.NewPhysics' },
   ctx
 );
 console.log('context aligned (expect consistent):', cv1.consistent, 'violations:', cv1.violations.length);
@@ -62,7 +62,7 @@ console.log('context string-style (expect violation):', cv4.violations.map(v => 
 const cc = contextualChameleon.analyze({
   scanId, correlationId,
   changes: [
-    { changeId: 'c1', targetSegment: 'seg', changeKind: 'add_class', proposedContent: 'com.pubg.krmobile.engine.NewPhysics' },
+    { changeId: 'c1', targetSegment: 'seg', changeKind: 'add_class', proposedContent: 'com.sandbox.krmobile.engine.NewPhysics' },
     { changeId: 'c2', targetSegment: 'seg', changeKind: 'add_class', proposedContent: 'org.evil.NewClass' },
   ],
   contexts: { seg: ctx },
@@ -109,14 +109,14 @@ const candidates = [
 
 const pick = pickRegion(
   { segmentId: 'seg', resourceType: 'logic', estimatedSizeBytes: 20000,
-    contextConstraints: { packageName: 'com.pubg', criticalPathSegments: [] } },
+    contextConstraints: { packageName: 'com.sandbox', criticalPathSegments: [] } },
   candidates
 );
 console.log('pickRegion (expect assets/extra):', pick ? pick.name : null);
 
 const pickTooBig = pickRegion(
   { segmentId: 'seg', resourceType: 'logic', estimatedSizeBytes: 300000,
-    contextConstraints: { packageName: 'com.pubg', criticalPathSegments: [] } },
+    contextConstraints: { packageName: 'com.sandbox', criticalPathSegments: [] } },
   candidates
 );
 console.log('pickRegion too-big (expect null):', pickTooBig);
@@ -124,7 +124,7 @@ console.log('pickRegion too-big (expect null):', pickTooBig);
 const dra = dynamicResourceAllocation.plan({
   scanId, correlationId,
   request: { segmentId: 'seg', resourceType: 'logic', estimatedSizeBytes: 20000,
-    contextConstraints: { packageName: 'com.pubg', criticalPathSegments: [] } },
+    contextConstraints: { packageName: 'com.sandbox', criticalPathSegments: [] } },
   candidates,
 });
 console.log('allocation ok:', dra.allocated, 'region:', dra.targetRegion?.name, 'size:', dra.memoryImpact);

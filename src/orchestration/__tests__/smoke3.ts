@@ -8,8 +8,8 @@ const correlationId = scanId;
 
 const fakeScan = {
   dexFiles: [
-    { name: 'classes.dex',  classes: ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader', 'com.pubg.krmobile.Assets'] },
-    { name: 'classes2.dex', classes: ['com.pubg.krmobile.Main', 'com.tencent.imsdk.Base'] },
+    { name: 'classes.dex',  classes: ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader', 'com.sandbox.krmobile.Assets'] },
+    { name: 'classes2.dex', classes: ['com.sandbox.krmobile.Main', 'com.tencent.imsdk.Base'] },
   ],
 };
 const edges = deriveEdgesFromScan(fakeScan);

@@ -48,13 +48,13 @@ const stubDeps: RunnerDeps = {
   } as any,
 };
 
-const APK = '/data/data/com.termux/files/home/PUBG_MOBILE_v2.apk';
+const APK = '/data/data/com.termux/files/home/SANDBOX_v2.apk';
 
 const input: PipelineInput = {
   scanId, apkPath: APK, transformedPath: APK,
   phases: ['import', 'investigate', 'analyze', 'edit', 'validate', 'build', 'export'],
   segments: [
-    { id: 'dex_class:com.pubg.krmobile.Main', type: 'dex_class', estimatedTokens: 4000, priority: 80, dependencies: [] },
+    { id: 'dex_class:com.sandbox.krmobile.Main', type: 'dex_class', estimatedTokens: 4000, priority: 80, dependencies: [] },
   ],
   workers: [
     { id: 'w1', model: 'deepseek-chat', maxContextTokens: 64000, currentLoad: 0, healthy: true },
@@ -65,15 +65,15 @@ const input: PipelineInput = {
     apkHash: 'h1', dexCount: 1, classCount: 2, entryCount: 2,
     files: ['classes.dex'],
     original: { apkHash: 'h1', dexCount: 1, classCount: 2, entryCount: 2, files: ['classes.dex'] },
-    dexFiles: [{ name: 'classes.dex', classes: ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader'] }],
+    dexFiles: [{ name: 'classes.dex', classes: ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader'] }],
   },
   classes: [
-    { fqcn: 'com.pubg.krmobile.Main', kind: 'class' },
-    { fqcn: 'com.pubg.krmobile.Loader', kind: 'class' },
+    { fqcn: 'com.sandbox.krmobile.Main', kind: 'class' },
+    { fqcn: 'com.sandbox.krmobile.Loader', kind: 'class' },
   ],
   patterns: [
-    { pattern: 'com.pubg.krmobile.Main', count: 3 },
-    { pattern: 'com.pubg.krmobile.Loader', count: 3 },
+    { pattern: 'com.sandbox.krmobile.Main', count: 3 },
+    { pattern: 'com.sandbox.krmobile.Loader', count: 3 },
     { pattern: '__mkit_trace_xyz__', count: 40 },
   ],
   entropySamples: [
@@ -89,19 +89,19 @@ const input: PipelineInput = {
     { path: 'classes.dex', minMs: 40, maxMs: 60, maxDepthDelta: 2 },
   ],
   proposedChanges: [
-    { changeId: 'c1', targetSegment: 'com.pubg.krmobile.Main', changeKind: 'add_class', proposedContent: 'com.pubg.krmobile.NewThing' },
+    { changeId: 'c1', targetSegment: 'com.sandbox.krmobile.Main', changeKind: 'add_class', proposedContent: 'com.sandbox.krmobile.NewThing' },
   ],
   contexts: {
-    'com.pubg.krmobile.Main': {
-      packageName: 'com.pubg.krmobile',
-      parentClasses: ['com.pubg.krmobile.Loader'],
+    'com.sandbox.krmobile.Main': {
+      packageName: 'com.sandbox.krmobile',
+      parentClasses: ['com.sandbox.krmobile.Loader'],
       siblingMethods: ['compute()', 'render()'],
       calledBy: [], calls: [],
       stringConstants: ['mode_idle', 'mode_active'],
     },
   },
   allocationRequests: [{
-    request: { segmentId: 'seg-1', resourceType: 'metadata', estimatedSizeBytes: 1000, contextConstraints: { packageName: 'com.pubg.krmobile', criticalPathSegments: [] } },
+    request: { segmentId: 'seg-1', resourceType: 'metadata', estimatedSizeBytes: 1000, contextConstraints: { packageName: 'com.sandbox.krmobile', criticalPathSegments: [] } },
     candidates: [{ name: 'assets/extra', freeBytes: 5000, isCritical: false, distanceFromCore: 0.9 }],
   }],
   inspectionSignals: [
@@ -109,12 +109,12 @@ const input: PipelineInput = {
   ],
   heartbeatExpected: [{ name: 'dex_count', kind: 'numeric', expected: '1', tolerance: 0.1 }],
   heartbeatObserved: [{ name: 'dex_count', value: '1' }],
-  versionObserved: { versionCode: 2100, versionName: '2.1.0', minSdk: 21, targetSdk: 33, packageName: 'com.pubg.krmobile' },
-  versionExpected: { versionCode: 2100, packageName: 'com.pubg.krmobile' },
+  versionObserved: { versionCode: 2100, versionName: '2.1.0', minSdk: 21, targetSdk: 33, packageName: 'com.sandbox.krmobile' },
+  versionExpected: { versionCode: 2100, packageName: 'com.sandbox.krmobile' },
   handshakeRequest: { queryType: 'version_check', payload: {}, clientVersion: '2100' },
   policyView: {
     currentVersionCode: 2100, currentVersionName: '2.1.0',
-    packageName: 'com.pubg.krmobile',
+    packageName: 'com.sandbox.krmobile',
     minSupportedVersionCode: 2000, forceUpdateRecommended: false,
   },
   depConstraints: [],

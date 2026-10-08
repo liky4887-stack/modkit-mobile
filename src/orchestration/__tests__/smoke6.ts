@@ -9,18 +9,18 @@ const correlationId = scanId;
 const observed = {
   versionCode: 2100, versionName: '2.1.0',
   minSdk: 21, targetSdk: 33,
-  packageName: 'com.pubg.krmobile',
+  packageName: 'com.sandbox.krmobile',
 };
 
 const perfect = evaluateContinuity(observed, {
   versionCode: 2100, versionName: '2.1.0', minSdk: 21, targetSdk: 33,
-  packageName: 'com.pubg.krmobile',
+  packageName: 'com.sandbox.krmobile',
 });
 console.log('continuity perfect (expect none/true):', perfect.action, perfect.consistent, 'score:', perfect.score);
 
 const mild = evaluateContinuity(observed, {
   versionCode: 2200, versionName: '2.2.0',
-  packageName: 'com.pubg.krmobile',
+  packageName: 'com.sandbox.krmobile',
 });
 console.log('continuity mild (expect adjust_metadata):', mild.action, 'score:', Number(mild.score.toFixed(2)));
 console.log('continuity mild severities:', mild.discrepancies.map(d => d.severity));
@@ -30,14 +30,14 @@ console.log('continuity severe (expect flag_review):', severe.action);
 
 const check = versionContinuityGuard.check({
   scanId, correlationId, observed,
-  expected: { versionCode: 2100, packageName: 'com.pubg.krmobile' },
+  expected: { versionCode: 2100, packageName: 'com.sandbox.krmobile' },
 });
 console.log('continuity wrapper (expect none):', check.action);
 
 // ---------- Fake Update Handshake ----------
 const view = {
   currentVersionCode: 2100, currentVersionName: '2.1.0',
-  packageName: 'com.pubg.krmobile',
+  packageName: 'com.sandbox.krmobile',
   minSupportedVersionCode: 2000,
   forceUpdateRecommended: false,
 };
@@ -71,19 +71,19 @@ const h4 = fakeUpdateHandshake.handle({
 console.log('handshake bad policy (expect false):', h4.policyCompliant);
 
 // ---------- Auto Migration ----------
-const oldClasses = ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader', 'com.pubg.krmobile.Assets', 'com.pubg.krmobile.engine.Physics'];
-const newClasses = ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader', 'com.pubg.krmobile.Assets', 'com.pubg.krmobile.engine.Render'];
+const oldClasses = ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader', 'com.sandbox.krmobile.Assets', 'com.sandbox.krmobile.engine.Physics'];
+const newClasses = ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader', 'com.sandbox.krmobile.Assets', 'com.sandbox.krmobile.engine.Render'];
 
 const delta = computeDelta(oldClasses, newClasses);
 console.log('delta added:', delta.classesAdded.length, 'removed:', delta.classesRemoved.length, 'common:', delta.classesCommon.length);
 
 const priorLedger = [
-  { id: 'L1', sourceSegment: 'com.pubg.krmobile.Main', targetOffsets: [{ start: 0x1000, end: 0x1040 }], rationale: 'a', validationOutcome: 'passed', beforeHash: 'a'.repeat(64), afterHash: 'b'.repeat(64) },
-  { id: 'L2', sourceSegment: 'com.pubg.krmobile.engine.Physics', targetOffsets: [{ start: 0x5000, end: 0x5040 }], rationale: 'b', validationOutcome: 'passed', beforeHash: 'c'.repeat(64), afterHash: 'd'.repeat(64) },
-  { id: 'L3', sourceSegment: 'com.pubg.krmobile.Loader', targetOffsets: [{ start: 0x2000, end: 0x2020 }], rationale: 'c', validationOutcome: 'pending', beforeHash: 'e'.repeat(64), afterHash: 'f'.repeat(64) },
+  { id: 'L1', sourceSegment: 'com.sandbox.krmobile.Main', targetOffsets: [{ start: 0x1000, end: 0x1040 }], rationale: 'a', validationOutcome: 'passed', beforeHash: 'a'.repeat(64), afterHash: 'b'.repeat(64) },
+  { id: 'L2', sourceSegment: 'com.sandbox.krmobile.engine.Physics', targetOffsets: [{ start: 0x5000, end: 0x5040 }], rationale: 'b', validationOutcome: 'passed', beforeHash: 'c'.repeat(64), afterHash: 'd'.repeat(64) },
+  { id: 'L3', sourceSegment: 'com.sandbox.krmobile.Loader', targetOffsets: [{ start: 0x2000, end: 0x2020 }], rationale: 'c', validationOutcome: 'pending', beforeHash: 'e'.repeat(64), afterHash: 'f'.repeat(64) },
 ];
 
-const migration = migrateLedger(priorLedger, { ...delta, classOffsetShift: { 'com.pubg.krmobile.Main': 0x100 } });
+const migration = migrateLedger(priorLedger, { ...delta, classOffsetShift: { 'com.sandbox.krmobile.Main': 0x100 } });
 console.log('migration successful (expect 1):', migration.successful.length);
 console.log('migration failed (expect 2):', migration.failed.length);
 console.log('migration first failure reason:', migration.failed[0]?.reason);

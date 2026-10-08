@@ -245,7 +245,7 @@ async function phasePartition(ctx: PhaseContext): Promise<string> {
     'Step 3: IMMEDIATELY return your final answer. Do not keep probing.',
     '',
     'The final answer must contain ONLY a JSON array (no prose around it):',
-    '[{"name":"pubg-app","kind":"app","seed_strings":["com.pubg."],"why":"top-level app package"},',
+    '[{"name":"sandbox-app","kind":"app","seed_strings":["com.sandbox."],"why":"top-level app package"},',
     ' {"name":"sentry","kind":"sdk","seed_strings":["io.sentry."],"why":"crash analytics"}]',
     '',
     'Rules:',

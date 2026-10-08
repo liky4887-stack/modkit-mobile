@@ -3,7 +3,7 @@
 import { eventBus } from './eventBus';
 
 export interface ClassName {
-  fqcn: string;         // e.g. com.pubg.krmobile.DownloaderActivity
+  fqcn: string;         // e.g. com.sandbox.krmobile.DownloaderActivity (sample target)
   kind: 'class' | 'interface' | 'enum';
 }
 

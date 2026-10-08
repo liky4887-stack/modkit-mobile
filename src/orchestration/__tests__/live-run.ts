@@ -3,7 +3,7 @@
 import { makeRunner, RunnerDeps } from '../orchestrationRunner';
 import { makeOrchestrator, noopDeps } from '../centralOrchestrator';
 
-const APK = '/data/data/com.termux/files/home/PUBG_MOBILE_v2.apk';
+const APK = '/data/data/com.termux/files/home/SANDBOX_v2.apk';
 const scanId = 'live-run-' + Date.now();
 
 // In-memory ledger so we can observe state without SQLite.
@@ -58,7 +58,7 @@ const runner = makeRunner(stubDeps);
 
 const fakeScan = {
   dexFiles: [
-    { name: 'classes.dex', classes: ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader'] },
+    { name: 'classes.dex', classes: ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader'] },
   ],
 };
 
@@ -72,7 +72,7 @@ const fakeScan = {
     totalTokenBudget: 100000,
     scan: fakeScan,
     segments: [
-      { id: 'dex_class:com.pubg.krmobile.Main', type: 'dex_class', estimatedTokens: 4000, priority: 80, dependencies: [] },
+      { id: 'dex_class:com.sandbox.krmobile.Main', type: 'dex_class', estimatedTokens: 4000, priority: 80, dependencies: [] },
     ],
     workers: [
       { id: 'w1', model: 'deepseek-chat', maxContextTokens: 64000, currentLoad: 0, healthy: true },
@@ -93,7 +93,7 @@ const fakeScan = {
   // Record one transformation to exercise the full proof+collision+ledger path
   const rec = await runner.recordTransformation({
     scanId,
-    segmentId: 'dex_class:com.pubg.krmobile.Main',
+    segmentId: 'dex_class:com.sandbox.krmobile.Main',
     phase: 'edit',
     workerId: 'w1',
     safetyScore: 0.9,

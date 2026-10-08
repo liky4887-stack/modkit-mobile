@@ -25,11 +25,11 @@ console.log('compare above (expect flag or adjust):', a2.action, 'deviation:', N
 
 // ---------- Signature Scrubber ----------
 const stats = [
-  { pattern: 'com.pubg.krmobile.Main', count: 5 },
-  { pattern: 'com.pubg.krmobile.Loader', count: 4 },
-  { pattern: 'com.pubg.krmobile.Assets', count: 6 },
-  { pattern: 'com.pubg.krmobile.Utils', count: 4 },
-  { pattern: 'com.pubg.krmobile.Foo', count: 3 },
+  { pattern: 'com.sandbox.krmobile.Main', count: 5 },
+  { pattern: 'com.sandbox.krmobile.Loader', count: 4 },
+  { pattern: 'com.sandbox.krmobile.Assets', count: 6 },
+  { pattern: 'com.sandbox.krmobile.Utils', count: 4 },
+  { pattern: 'com.sandbox.krmobile.Foo', count: 3 },
   { pattern: '__mkit_trace_v9_20241003__', count: 40 },
 ];
 const baseline = computeBaseline(stats);
@@ -39,37 +39,37 @@ console.log('outliers count (expect >=1):', outliers.length);
 console.log('outlier pattern:', outliers[0] ? outliers[0].pattern : null);
 
 console.log('looksSynthetic __mkit (expect true):', looksSynthetic('__mkit_trace_v9_20241003__'));
-console.log('looksSynthetic pubg main (expect false):', looksSynthetic('com.pubg.krmobile.Main'));
+console.log('looksSynthetic sandbox main (expect false):', looksSynthetic('com.sandbox.krmobile.Main'));
 
 const sug = suggestNormalization(
   { pattern: '__mkit_trace_v9_20241003__', count: 40, zScore: 3.5, suspicion: 0.9, reason: 'z=3.5' },
-  ['com.pubg.krmobile.Main']
+  ['com.sandbox.krmobile.Main']
 );
 console.log('suggestion action:', sug ? sug.suggestion : null);
 
 const scrub = signatureScrubber.analyze({
   scanId, correlationId,
   stats,
-  projectNorms: ['com.pubg.krmobile.Main', 'com.pubg.krmobile.Loader'],
+  projectNorms: ['com.sandbox.krmobile.Main', 'com.sandbox.krmobile.Loader'],
   zThreshold: 1.5,
 });
 console.log('scrubber outliers/suggestions:', scrub.outliers.length, scrub.suggestions.length);
 
 // ---------- Heuristic Mimicry ----------
 const classes = [
-  { fqcn: 'com.pubg.krmobile.Main',     kind: 'class' as const },
-  { fqcn: 'com.pubg.krmobile.Loader',   kind: 'class' as const },
-  { fqcn: 'com.pubg.krmobile.Assets',   kind: 'class' as const },
-  { fqcn: 'com.pubg.krmobile.Utils',    kind: 'class' as const },
-  { fqcn: 'com.pubg.krmobile.engine.Physics', kind: 'class' as const },
-  { fqcn: 'com.pubg.krmobile.engine.Render',  kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.Main',     kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.Loader',   kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.Assets',   kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.Utils',    kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.engine.Physics', kind: 'class' as const },
+  { fqcn: 'com.sandbox.krmobile.engine.Render',  kind: 'class' as const },
 ];
 const norms = learnNorms(classes);
 console.log('norms case (expect pascal):', norms.lastSegmentCase);
 console.log('norms sampleSize (expect 6):', norms.sampleSize);
 console.log('norms top packages:', norms.topPackages);
 
-const alignedScore = scoreChange('c1', 'com.pubg.krmobile.NewThing', norms);
+const alignedScore = scoreChange('c1', 'com.sandbox.krmobile.NewThing', norms);
 console.log('aligned score (expect high):', alignedScore.consistency.toFixed(2));
 
 const badScore = scoreChange('c2', 'org.evil.__modkit_trace__', norms);
@@ -80,7 +80,7 @@ const mimic = heuristicMimicry.analyze({
   scanId, correlationId,
   classes,
   proposedChanges: [
-    { changeId: 'c1', proposedFqcn: 'com.pubg.krmobile.NewThing' },
+    { changeId: 'c1', proposedFqcn: 'com.sandbox.krmobile.NewThing' },
     { changeId: 'c2', proposedFqcn: 'org.evil.__modkit_trace__' },
   ],
 });
