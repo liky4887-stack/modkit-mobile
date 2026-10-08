@@ -435,14 +435,44 @@ async function phaseCoordinate(ctx: PhaseContext): Promise<string> {
 
   // Fallback: synth one remediation per unit so propose/verify/export can run.
   // The coordinate answer is still saved to the investigation table.
+  // Fallback plan: pull real class names from class_cache so verify
+  // has something to check. Never use unit.name — that's a kebab-id.
+  const { classCache } = await import('@/classdata/classCache');
+  const scanId = ctx.job.scanId || ctx.job.id;
   const fallbackUnits = await pipelineStore.listUnits(ctx.job.id);
-  const synthetic: Remediation[] = fallbackUnits.slice(0, 6).map((u, i) => ({
-    id: 'r' + (i + 1),
-    title: 'Review ' + u.name + ' for privacy and data-minimization',
-    target_class: u.name,
-    rationale: 'Investigation flagged this unit; requires per-class review.',
-    expected_effect: 'Documented data flows and minimized surfaces.',
-  }));
+
+  const synthetic: Remediation[] = [];
+  for (let i = 0; i < fallbackUnits.length && synthetic.length < 6; i++) {
+    const u = fallbackUnits[i];
+    let seedClasses: string[] = [];
+    try {
+      const parsed = JSON.parse(u.classesJson || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        seedClasses = parsed.slice(0, 3).map(String);
+      }
+    } catch {}
+
+    // If the unit didn't list classes, sample from class_cache by prefix
+    if (seedClasses.length === 0) {
+      try {
+        const prefix = u.name.split('-')[0];
+        const rows = await classCache.byPackagePrefix(scanId, prefix, 3);
+        seedClasses = rows.map((r: any) => r.fqcn).slice(0, 3);
+      } catch {}
+    }
+
+    for (const fqcn of seedClasses) {
+      if (!fqcn.includes('.')) continue;
+      synthetic.push({
+        id: 'r' + (synthetic.length + 1),
+        title: 'Review ' + fqcn.split('.').pop() + ' for privacy and data minimization',
+        target_class: fqcn,
+        rationale: 'Investigation flagged ' + u.name + '; this class needs review.',
+        expected_effect: 'Documented data flows and reduced surface.',
+      });
+      if (synthetic.length >= 6) break;
+    }
+  }
 
   if (synthetic.length === 0) {
     await pipelineStore.logRawAnswer(ctx.job.id, 'coordinate', investigation.finalAnswer);
@@ -656,6 +686,20 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
   ctx.emit('export', 'start', candidates.length + ' artifacts to produce');
 
   const outDir = '/storage/emulated/0/Download/modkit-artifacts/' + ctx.job.id;
+
+  // /file/write doesn't mkdir -p. Ensure the dir exists first.
+  try {
+    await fetch('http://127.0.0.1:8790/executeCommand', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        command: 'mkdir',
+        args: ['-p', outDir],
+        timeoutMs: 5000,
+      }),
+    });
+  } catch {}
+
   let done = 0;
   let bytes = 0;
   const failures: string[] = [];
@@ -721,13 +765,100 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
     }
   }
 
+  const sbomPath = await writeSbom(ctx);
+
   const failNote = failures.length > 0
     ? ' · ' + failures.length + ' failed'
     : '';
-  return done + ' artifacts (' + bytes + ' bytes) → ' + outDir + failNote;
+  const sbomNote = sbomPath ? ' · SBOM written' : '';
+  return done + ' artifacts (' + bytes + ' bytes) → ' + outDir + failNote + sbomNote;
 }
 
 // ── audit ───────────────────────────────────────────────
+
+async function writeSbom(ctx: PhaseContext): Promise<string | null> {
+  try {
+    const { classCache } = await import('@/classdata/classCache');
+    const scanId = ctx.job.scanId || ctx.job.id;
+
+    const summary = await classCache.packageSummary(scanId, 60);
+    if (!summary || summary.length === 0) return null;
+
+    // Map top-level package prefixes to known SDK coordinates
+    const KNOWN: Array<{ match: RegExp; name: string; group: string }> = [
+      { match: /^io\.sentry\./,          name: 'Sentry',      group: 'io.sentry' },
+      { match: /^com\.google\.firebase\./, name: 'Firebase',  group: 'com.google.firebase' },
+      { match: /^com\.adjust\.sdk\./,    name: 'Adjust',      group: 'com.adjust.sdk' },
+      { match: /^com\.facebook\./,        name: 'Facebook',    group: 'com.facebook.android' },
+      { match: /^com\.tencent\./,         name: 'Tencent',     group: 'com.tencent' },
+      { match: /^io\.flutter\./,          name: 'Flutter',     group: 'io.flutter' },
+      { match: /^com\.google\.android\.gms\./, name: 'Google Play Services', group: 'com.google.android.gms' },
+      { match: /^okhttp3\./,               name: 'OkHttp',      group: 'com.squareup.okhttp3' },
+      { match: /^com\.squareup\./,        name: 'Square',      group: 'com.squareup' },
+      { match: /^com\.android\.billingclient\./, name: 'Play Billing', group: 'com.android.billingclient' },
+    ];
+
+    const components: any[] = [];
+    const seen = new Set<string>();
+    for (const entry of summary) {
+      for (const k of KNOWN) {
+        if (k.match.test(entry.top + '.') && !seen.has(k.group)) {
+          seen.add(k.group);
+          components.push({
+            type: 'library',
+            name: k.name,
+            group: k.group,
+            'bom-ref': 'pkg:maven/' + k.group,
+            properties: [
+              { name: 'modkit:classCount', value: String(entry.count) },
+              { name: 'modkit:packagePrefix', value: entry.top },
+            ],
+          });
+          break;
+        }
+      }
+    }
+
+    const sbom = {
+      bomFormat: 'CycloneDX',
+      specVersion: '1.5',
+      version: 1,
+      metadata: {
+        timestamp: new Date().toISOString(),
+        tools: [{ vendor: 'modkit', name: 'modkit-pipeline', version: '1.0.0' }],
+        component: {
+          type: 'application',
+          name: ctx.job.apkName || 'target.apk',
+          'bom-ref': 'apk:' + (ctx.job.apkName || 'target'),
+        },
+      },
+      components,
+    };
+
+    const outDir = '/storage/emulated/0/Download/modkit-reports/' + ctx.job.id;
+    try {
+      await fetch('http://127.0.0.1:8790/executeCommand', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'mkdir', args: ['-p', outDir], timeoutMs: 5000 }),
+      });
+    } catch {}
+
+    const filePath = outDir + '/sbom.cyclonedx.json';
+    const content = JSON.stringify(sbom, null, 2);
+    const res = await fetch('http://127.0.0.1:8790/file/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: filePath, content }),
+    }).then(r => r.json());
+
+    if (!res.ok) return null;
+    ctx.emit('export', 'running', 'SBOM: ' + components.length + ' components → ' + filePath);
+    return filePath;
+  } catch {
+    return null;
+  }
+}
 
 async function phaseAudit(ctx: PhaseContext): Promise<string> {
   const units = await pipelineStore.listUnits(ctx.job.id);
