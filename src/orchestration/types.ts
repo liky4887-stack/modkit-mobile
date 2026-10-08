@@ -1,7 +1,13 @@
 export type PhaseId =
   | 'import' | 'investigate' | 'analyze' | 'edit'
   | 'preview' | 'validate' | 'build' | 'export'
-  | 'orchestrator' | 'recovery';
+  | 'orchestrator' | 'recovery'
+  | 'partition'
+  | 'dispatch'
+  | 'coordinate'
+  | 'propose'
+  | 'verify'
+  | 'audit';
 
 export type FunctionId =
   | 'feedback_loops' | 'validation_phase' | 'orchestration_logs'
