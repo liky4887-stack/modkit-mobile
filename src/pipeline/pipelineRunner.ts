@@ -48,6 +48,69 @@ export interface RunResult {
 // Uses termux-wake-lock via the backend to keep the CPU alive during
 // long agent runs. Released on completion.
 
+async function syncJobToBackend(jobId: string): Promise<void> {
+  try {
+    const job = await pipelineStore.getJob(jobId);
+    if (!job) return;
+
+    const [phases, units, investigations] = await Promise.all([
+      pipelineStore.getPhases(jobId).catch(() => []),
+      pipelineStore.listUnits(jobId).catch(() => []),
+      pipelineStore.listInvestigations(jobId, 200).catch(() => []),
+    ]);
+
+    let artifacts: any[] = [];
+    try {
+      const { getDb } = await import('@/db/client');
+      const db = await getDb();
+      artifacts = await db.getAllAsync<any>(
+        `SELECT id, phase, title, file_path, size_bytes, sha256, created_at
+           FROM finding_artifacts WHERE job_id = ? ORDER BY created_at DESC LIMIT 200`,
+        [jobId]
+      );
+    } catch {}
+
+    let chats: any[] = [];
+    try {
+      const { getDb } = await import('@/db/client');
+      const db = await getDb();
+      chats = await db.getAllAsync<any>(
+        `SELECT id, phase, unit_id, state, turns, tokens_in, tokens_out,
+                elapsed_ms, started_at, finished_at
+           FROM pipeline_chats WHERE job_id = ?
+           ORDER BY started_at DESC LIMIT 200`,
+        [jobId]
+      );
+    } catch {}
+
+    const payload = {
+      job_id: job.id,
+      state: job.state,
+      apk_name: job.apkName,
+      apk_path: job.apkPath,
+      current_phase: job.currentPhase,
+      ds_calls: job.dsCalls,
+      ds_elapsed_ms: job.dsElapsedMs,
+      started_at: job.startedAt,
+      updated_at: Date.now(),
+      finished_at: job.finishedAt,
+      phases,
+      units,
+      investigations,
+      artifacts,
+      chats,
+    };
+
+    await fetch('http://127.0.0.1:8790/orchestration/sync', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // never fail the pipeline on a sync issue
+  }
+}
+
 async function acquireWakeLock(reason: string): Promise<boolean> {
   try {
     const r = await fetch('http://127.0.0.1:8790/executeCommand', {
@@ -1100,11 +1163,13 @@ export const pipelineRunner = {
         await pipelineStore.finishPhase(jobId, phase, summary);
         outcomes.push({ phase, state: 'done', summary, elapsedMs: Date.now() - t0 });
         emit(phase, 'done', summary);
+        void syncJobToBackend(jobId);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         await pipelineStore.failPhase(jobId, phase, msg);
         outcomes.push({ phase, state: 'failed', error: msg, elapsedMs: Date.now() - t0 });
         emit(phase, 'failed', msg);
+        void syncJobToBackend(jobId);
 
         await pipelineStore.setJobState(jobId, 'failed', msg);
         await releaseWakeLock();
@@ -1121,6 +1186,7 @@ export const pipelineRunner = {
 
     await pipelineStore.setCurrent(jobId, null);
     await pipelineStore.setJobState(jobId, 'done');
+    await syncJobToBackend(jobId);
     await releaseWakeLock();
 
     return {
