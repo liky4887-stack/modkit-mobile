@@ -431,3 +431,6 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
 });
+
+// --- Verification Audit Integration ---
+import { VerificationAuditView } from "../../src/components/VerificationAuditView";
