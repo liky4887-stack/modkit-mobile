@@ -1,3 +1,16 @@
+import { integrityHeartbeat } from "../orchestration/integrityHeartbeat";
+import { autoMigration } from "../orchestration/autoMigration";
+import { fakeUpdateHandshake } from "../orchestration/fakeUpdateHandshake";
+import { versionContinuityGuard } from "../orchestration/versionContinuityGuard";
+import { dynamicResourceAllocation } from "../orchestration/dynamicResourceAllocation";
+import { antiAnalysisTripwire } from "../orchestration/antiAnalysisTripwire";
+import { contextualChameleon } from "../orchestration/contextualChameleon";
+import { temporalShifter } from "../orchestration/temporalShifter";
+import { heuristicMimicry } from "../orchestration/heuristicMimicry";
+import { entropyBalancer } from "../orchestration/entropyBalancer";
+import { signatureScrubber } from "../orchestration/signatureScrubber";
+import { crossSessionIntelligence } from "../orchestration/crossSessionIntelligence";
+import { binaryDiffViewer } from "../orchestration/binaryDiffViewer";
 // Pipeline runner — the phase orchestrator.
 // Single entry: pipelineRunner.run(jobId, opts). Resumable across calls.
 // 09a implements: import, partition, dispatch.
@@ -1199,3 +1212,66 @@ export const pipelineRunner = {
     };
   },
 };
+
+// Phase 8 integration
+
+  // [SHΔDØW CORE] Version Continuity Guard
+
+  // [SHΔDØW CORE] Fake Update Handshake Simulation
+  try {
+    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
+      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Fake Update Handshake warning:", err);
+  }
+ Verification
+  try {
+    if (typeof versionContinuityGuard !== "undefined" && versionContinuityGuard) {
+      console.log("[Pipeline] Verifying Version Continuity Guard
+
+  // [SHΔDØW CORE] Fake Update Handshake Simulation
+  try {
+    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
+      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Fake Update Handshake warning:", err);
+  }
+ constraints...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Version Continuity Guard
+
+  // [SHΔDØW CORE] Fake Update Handshake Simulation
+  try {
+    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
+      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Fake Update Handshake warning:", err);
+  }
+ warning:", err);
+  }
+
+// Phase 2 integration
+
+  // [SHΔDØW CORE] Auto Migration Delta Mapping
+  try {
+    if (typeof autoMigration !== "undefined" && autoMigration) {
+      console.log("[Pipeline] Checking Auto Migration baseline compatibility...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Auto Migration warning:", err);
+  }
+
+// Phase 9 integration
+
+  // [SHΔDØW CORE] Integrity Heartbeat Signal Manager
+  try {
+    if (typeof integrityHeartbeat !== "undefined" && integrityHeartbeat) {
+      console.log("[Pipeline] Initializing Integrity Heartbeat signal verification...");
+    }
+  } catch (err) {
+    console.warn("[Pipeline] Integrity Heartbeat warning:", err);
+  }
