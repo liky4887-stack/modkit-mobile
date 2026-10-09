@@ -159,7 +159,62 @@ export const TOOL_DEFS: ToolDef[] = [
 
 // ── Prompt rendering ─────────────────────────────────────────────
 export function renderToolList(): string {
-  const lines: string[] = [];
+  const lines: string[] = [
+  // ─── REA (Reverse Engineer Anything) tools ────────────────────────
+  {
+    name: 'rea_decompile_class',
+    description: 'Decompile an Android class to Java source via headless JADX. More accurate than DexKit for complex classes. Returns Java source with line numbers.',
+    params: [
+      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
+      { name: 'class_name', type: 'string', required: true, description: 'fully-qualified class name (e.g. com.example.Foo)' },
+    ],
+  },
+  {
+    name: 'rea_get_manifest',
+    description: 'Extract and parse AndroidManifest.xml. Returns permissions, activities, services, receivers, providers, and intent filters as structured JSON.',
+    params: [
+      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
+    ],
+  },
+  {
+    name: 'rea_search_strings',
+    description: 'Search the APK string pool for a pattern (URL, key, secret, log tag). Returns matches with class context and evidence.',
+    params: [
+      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
+      { name: 'pattern', type: 'string', required: true, description: 'substring or regex to search' },
+      { name: 'case_sensitive', type: 'boolean', description: 'case-sensitive match, default false' },
+    ],
+  },
+  {
+    name: 'rea_find_classes_by_reference',
+    description: 'Find every class that references a given method, class, or field. Cross-reference search with call-site context.',
+    params: [
+      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK' },
+      { name: 'target', type: 'string', required: true, description: 'method/class/field signature to search for' },
+    ],
+  },
+  // ─── JADX high-fidelity decompilation ─────────────────────────────
+  {
+    name: 'jadx_decompile_class',
+    description: 'Full Java decompilation via JADX CLI. Slower than decompile_class but produces much more readable source with proper generics, lambdas, and control flow. Use when DexKit output is unclear.',
+    params: [
+      { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name (e.g. com.example.Foo)' },
+    ],
+  },
+  {
+    name: 'jadx_decompile_method',
+    description: 'Decompile a single method via JADX. Extracts just the method body from a full class decompile. Useful for focused review of one function.',
+    params: [
+      { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name' },
+      { name: 'method', type: 'string', required: true, description: 'method name' },
+    ],
+  },
+  {
+    name: 'raw_manifest',
+    description: 'Full decoded AndroidManifest.xml as pretty-printed XML. Use when you need to see exact attribute values, intent-filter actions, or permissions not surfaced by the manifest summary.',
+    params: [],
+  },
+];
   for (const t of TOOL_DEFS) {
     lines.push('- ' + t.name + '(' + t.params.map(p => (p.required ? p.name : '[' + p.name + ']')).join(', ') + ')');
     lines.push('  ' + t.description);
