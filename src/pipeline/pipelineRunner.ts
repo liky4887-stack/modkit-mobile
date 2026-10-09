@@ -491,6 +491,7 @@ async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
       done++;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[pipeline] unit ${unit.name} FAILED: ${msg.slice(0, 200)}`);
       await pipelineStore.updateUnit(unit.id, {
         state: 'failed',
         finishedAt: Date.now(),
@@ -522,6 +523,206 @@ interface Remediation {
   target_class: string;
   rationale: string;
   expected_effect: string;
+}
+
+async function phaseFindings(ctx: PhaseContext): Promise<string> {
+  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
+  if (investigations.length === 0) {
+    return '0 investigations to synthesize findings from';
+  }
+
+  ctx.emit('findings', 'start', investigations.length + ' investigations to analyze');
+
+  // Build a compact evidence bundle. Full answers can be 10-30KB each,
+  // so we cap per-report to keep the total prompt under DeepSeek's
+  // practical limits.
+  const PER_REPORT_CAP = 6000;
+  const blocks: string[] = [];
+  for (const inv of investigations) {
+    let answer = '';
+    try {
+      answer = (await pipelineStore.getFullAnswer(inv.id)) || inv.answer_preview || '';
+    } catch {
+      answer = inv.answer_preview || '';
+    }
+    const trimmed = answer.length > PER_REPORT_CAP
+      ? answer.slice(0, PER_REPORT_CAP) + '\n\n[... truncated ...]'
+      : answer;
+    const label = (inv.phase || '?') + '/' + (inv.unit_id ? String(inv.unit_id).slice(0, 8) : 'job');
+    blocks.push('=== ' + label + ' ===\n' + trimmed);
+  }
+
+  const query = PHASE_QUERIES.findings(blocks.join('\n\n'));
+  const investigation = await investigateRunner.run({
+    jobId: ctx.job.id,
+    phase: 'findings',
+    query,
+    maxIterations: 3,   // synthesis only, no tool use
+    onStep: (step) => { try { ctx.onStep?.('findings', step); } catch {} },
+  });
+
+  const raw = extractJsonArray<any>(investigation.finalAnswer);
+  if (!raw || raw.length === 0) {
+    await pipelineStore.logRawAnswer(ctx.job.id, 'findings', investigation.finalAnswer);
+    return 'no findings parsed — raw answer logged';
+  }
+
+  // Normalize shape + clamp every field so a malformed row can't wedge
+  // the UI or the D export phase.
+  const SEV = new Set(['critical', 'high', 'medium', 'low', 'info']);
+  const normalized = raw.map((f, i) => ({
+    severity: SEV.has(String(f.severity || '').toLowerCase())
+      ? String(f.severity).toLowerCase() as any
+      : 'info',
+    category: String(f.category || 'uncategorized').slice(0, 64).toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    title: String(f.title || ('Finding ' + (i + 1))).slice(0, 200),
+    risk: String(f.risk || '').slice(0, 2000),
+    evidenceClass: f.evidence_class ? String(f.evidence_class).slice(0, 200) : null,
+    evidenceMethod: f.evidence_method ? String(f.evidence_method).slice(0, 200) : null,
+    evidenceSource: f.evidence_source ? String(f.evidence_source).slice(0, 200) : null,
+    patch: f.proposed_patch ?? {},
+    verification: f.verification ? String(f.verification).slice(0, 500) : null,
+  }));
+
+  const n = await pipelineStore.createFindings(ctx.job.id, normalized);
+  const bySev = normalized.reduce<Record<string, number>>((acc, f) => {
+    acc[f.severity] = (acc[f.severity] || 0) + 1;
+    return acc;
+  }, {});
+  const sevSummary = Object.entries(bySev).map(([k, v]) => v + ' ' + k).join(', ');
+  return n + ' findings stored (' + sevSummary + ')';
+}
+
+async function phaseApply(ctx: PhaseContext): Promise<string> {
+  const approved = await pipelineStore.listApprovedFindings(ctx.job.id);
+  if (approved.length === 0) {
+    return '0 approved findings — nothing to apply';
+  }
+
+  ctx.emit('apply', 'start', approved.length + ' approved findings');
+
+  // Backend proxy base — same 8790 the rest of the app talks to.
+  const BACKEND = 'http://127.0.0.1:8790';
+
+  // 1. Resolve dex for each finding's evidence_class
+  const findingsWithDex: any[] = [];
+  for (const f of approved) {
+    const targetClass = f.evidenceClass || (f.patch && f.patch.target_class);
+    if (!targetClass) {
+      await pipelineStore.setFindingState(f.id, 'failed', 'no target class');
+      continue;
+    }
+    try {
+      const r = await fetch(BACKEND + '/tools/apk_find_class_dex', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fqcn: targetClass }),
+      });
+      const j: any = await r.json();
+      const dex = j?.candidate_dexes?.[0];
+      if (!dex) {
+        await pipelineStore.setFindingState(f.id, 'failed', 'no dex contains class');
+        continue;
+      }
+      findingsWithDex.push({
+        id: f.id,
+        dex,
+        patch: {
+          type: f.patch?.type || 'informational',
+          target_class: targetClass,
+          target_field: f.patch?.target,
+          target_method: f.patch?.method || f.evidenceMethod,
+          new_value: f.patch?.change === 'false' ? false : (f.patch?.change === 'true' ? true : undefined),
+        },
+      });
+    } catch (e) {
+      await pipelineStore.setFindingState(f.id, 'failed', (e as Error).message.slice(0, 200));
+    }
+  }
+
+  if (findingsWithDex.length === 0) {
+    return 'no findings could be resolved to a dex';
+  }
+
+  // 2. Call sidecar /apk/apply_all
+  const APK = ctx.job.apkPath;
+  const OUTPUT = '/storage/emulated/0/Download/modkit-enhanced/' + ctx.job.id.slice(0, 12) + '-enhanced.apk';
+
+  // Filter to patchable types only
+  const patchable = findingsWithDex.filter(f =>
+    ['set_field_boolean', 'noop_method', 'remove_class'].includes(f.patch.type));
+
+  if (patchable.length === 0) {
+    return findingsWithDex.length + ' resolved, 0 patchable (all informational)';
+  }
+
+  try {
+    const r = await fetch(BACKEND + '/tools/apk_orchestrated_apply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        apk_path: APK,
+        output_path: OUTPUT,
+        findings: patchable,
+      }),
+      // Long-running: batch extract + patch + recombine + sign + follow-back
+    });
+    const j: any = await r.json();
+    if (!j.ok) {
+      return 'apply failed: ' + (j.error || 'unknown');
+    }
+    // Persist the full orchestration report — every batch, every verdict,
+    // every follow-back check is now auditable from the job record.
+    await pipelineStore.setJobJson(ctx.job.id, 'plan', {
+      orchestration_verdict: j.verdict,
+      enhanced_apk: j.recombination?.final_apk,
+      final_size: j.recombination?.final_size,
+      integrity: j.recombination?.integrity,
+      signature: j.recombination?.signature,
+      batches: j.batches,
+      follow_back: j.follow_back,
+      cross_batch: j.cross_batch,
+      report_path: j.report_path,
+      total_ms: j.total_ms,
+    });
+
+    // Mark per-finding state from the orchestrator's per-patch verdicts.
+    const verdictByFinding: Record<string, string> = {};
+    for (const b of (j.batches || [])) {
+      for (const v of (b.verdicts || [])) {
+        verdictByFinding[v.id] = v.verdict;
+      }
+    }
+    let appliedCount = 0;
+    let silentCount = 0;
+    let failedCount = 0;
+    for (const f of patchable) {
+      const verdict = verdictByFinding[f.id];
+      if (verdict === 'applied' || verdict === 'already_satisfied') {
+        await pipelineStore.setFindingState(f.id, 'applied');
+        appliedCount++;
+      } else if (verdict === 'silent_failure') {
+        await pipelineStore.setFindingState(f.id, 'failed', 'silent failure: marker missing after patch');
+        silentCount++;
+      } else {
+        await pipelineStore.setFindingState(f.id, 'failed', verdict || 'unknown verdict');
+        failedCount++;
+      }
+    }
+
+    // Surface systemic issues as a warning the operator can act on.
+    const systemic = (j.cross_batch?.systemic_issues || []).length;
+
+    return (
+      appliedCount + ' applied, ' + failedCount + ' failed' +
+      (silentCount ? ', ' + silentCount + ' SILENT FAILURES' : '') +
+      (systemic ? ', ' + systemic + ' systemic pattern(s)' : '') +
+      ' — verdict: ' + j.verdict +
+      ' → ' + (j.recombination?.final_apk || 'no output')
+    );
+  } catch (e) {
+    return 'apply error: ' + (e as Error).message.slice(0, 200);
+  }
 }
 
 async function phaseCoordinate(ctx: PhaseContext): Promise<string> {
@@ -1170,21 +1371,27 @@ export const pipelineRunner = {
         else if (phase === 'dispatch')    summary = await phaseDispatch(ctx);
         else if (phase === 'investigate') summary = await phaseInvestigate(ctx);
         else if (phase === 'coordinate')  summary = await phaseCoordinate(ctx);
+        else if (phase === 'findings')    summary = await phaseFindings(ctx);
         else if (phase === 'propose')     summary = await phasePropose(ctx);
         else if (phase === 'verify')      summary = await phaseVerify(ctx);
+        else if (phase === 'apply')       summary = await phaseApply(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);
         else                              summary = 'unknown phase: ' + phase;
 
+        const elapsedMs = Date.now() - t0;
         await pipelineStore.finishPhase(jobId, phase, summary);
-        outcomes.push({ phase, state: 'done', summary, elapsedMs: Date.now() - t0 });
-        emit(phase, 'done', summary);
+        outcomes.push({ phase, state: 'done', summary, elapsedMs });
+        console.log(`[pipeline] ${phase} done in ${(elapsedMs/1000).toFixed(1)}s — ${summary ?? ''}`);
+        emit(phase, 'done', `${summary} — ${(elapsedMs/1000).toFixed(1)}s`);
         void syncJobToBackend(jobId);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        const failMs = Date.now() - t0;
         await pipelineStore.failPhase(jobId, phase, msg);
-        outcomes.push({ phase, state: 'failed', error: msg, elapsedMs: Date.now() - t0 });
-        emit(phase, 'failed', msg);
+        outcomes.push({ phase, state: 'failed', error: msg, elapsedMs: failMs });
+        console.warn(`[pipeline] ${phase} FAILED in ${(failMs/1000).toFixed(1)}s — ${msg}`);
+        emit(phase, 'failed', `${msg} — ${(failMs/1000).toFixed(1)}s`);
         void syncJobToBackend(jobId);
 
         await pipelineStore.setJobState(jobId, 'failed', msg);
@@ -1215,63 +1422,3 @@ export const pipelineRunner = {
     };
   },
 };
-
-// Phase 8 integration
-
-  // [SHΔDØW CORE] Version Continuity Guard
-
-  // [SHΔDØW CORE] Fake Update Handshake Simulation
-  try {
-    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
-      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Fake Update Handshake warning:", err);
-  }
-  try {
-    if (typeof versionContinuityGuard !== "undefined" && versionContinuityGuard) {
-      console.log("[Pipeline] Verifying Version Continuity Guard");
-
-  // [SHΔDØW CORE] Fake Update Handshake Simulation
-  try {
-    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
-      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Fake Update Handshake warning:", err);
-  }
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Version Continuity Guard warning:", err);
-
-  // [SHΔDØW CORE] Fake Update Handshake Simulation
-  try {
-    if (typeof fakeUpdateHandshake !== "undefined" && fakeUpdateHandshake) {
-      console.log("[Pipeline] Verifying Fake Update Handshake negotiation policy...");
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Fake Update Handshake warning:", err);
-  }
-  }
-
-// Phase 2 integration
-
-  // [SHΔDØW CORE] Auto Migration Delta Mapping
-  try {
-    if (typeof autoMigration !== "undefined" && autoMigration) {
-      console.log("[Pipeline] Checking Auto Migration baseline compatibility...");
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Auto Migration warning:", err);
-  }
-
-// Phase 9 integration
-
-  // [SHΔDØW CORE] Integrity Heartbeat Signal Manager
-  try {
-    if (typeof integrityHeartbeat !== "undefined" && integrityHeartbeat) {
-      console.log("[Pipeline] Initializing Integrity Heartbeat signal verification...");
-    }
-  } catch (err) {
-    console.warn("[Pipeline] Integrity Heartbeat warning:", err);
-  }

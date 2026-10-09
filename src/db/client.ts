@@ -30,11 +30,30 @@ async function tryOpen(): Promise<SQLite.SQLiteDatabase> {
  * Open with self-heal. tryOpen() self-closes on failure so the file is
  * released before we delete it. Then we wipe and retry once.
  */
+// Only wipe on genuine corruption signals. Everything else is a code or
+// migration bug — wiping silently destroys real data and hides the bug.
+function looksLikeCorruption(err: unknown): boolean {
+  const s = String((err as any)?.message ?? err ?? '').toLowerCase();
+  return (
+    s.includes('sqlite_corrupt') ||
+    s.includes('database disk image is malformed') ||
+    s.includes('file is not a database') ||
+    s.includes('sqlite_notadb') ||
+    s.includes('database corrupt')
+  );
+}
+
 async function openWithSelfHeal(): Promise<SQLite.SQLiteDatabase> {
   try {
     return await tryOpen();
   } catch (firstErr) {
-    console.warn('[db] open failed, wiping and retrying:', firstErr);
+    if (!looksLikeCorruption(firstErr)) {
+      // Migration bug, missing column, locked file, etc — surface it.
+      // Do NOT wipe; real data lives here.
+      console.error('[db] open failed (not corruption — NOT wiping):', firstErr);
+      throw firstErr;
+    }
+    console.warn('[db] open failed (corruption detected), wiping:', firstErr);
     try {
       await SQLite.deleteDatabaseAsync(DB_NAME);
       console.log('[db] wiped', DB_NAME, '(and sidecars)');

@@ -9,7 +9,7 @@ export interface RateLimiterConfig {
 }
 
 export const DEFAULT_RATE_LIMIT: RateLimiterConfig = {
-  maxConcurrent: 3,
+  maxConcurrent: 2,
   maxPerMinute: 60,
   baseBackoffMs: 2000,
   maxBackoffMs: 60000,

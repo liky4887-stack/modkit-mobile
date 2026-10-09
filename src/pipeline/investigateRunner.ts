@@ -8,7 +8,7 @@ import { pipelineStore } from './pipelineStore';
 
 export interface InvestigateRequest {
   jobId: string;
-  phase: 'partition' | 'investigate' | 'coordinate' | 'propose' | 'verify' | 'export';
+  phase: 'import' | 'partition' | 'dispatch' | 'investigate' | 'coordinate' | 'findings' | 'propose' | 'verify' | 'apply' | 'export' | 'audit';
   query: string;
   unitId?: string | null;
   maxIterations?: number;

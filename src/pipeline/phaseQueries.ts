@@ -64,6 +64,53 @@ export const PHASE_QUERIES = {
   },
 
   // ── coordinate ────────────────────────────────────────────
+  findings(reports: string): string {
+    return [
+      'You are generating a structured findings list from the',
+      'investigation reports below. Each report is markdown from an',
+      'analyst who examined one unit of the app.',
+      '',
+      'Read them all. Then emit a JSON array of findings — one finding',
+      'per issue an auditor should be able to review and decide to fix',
+      'or dismiss.',
+      '',
+      'Output ONLY the JSON array. No prose. No code fences.',
+      '',
+      'Schema for each finding:',
+      '[',
+      '  {',
+      '    "severity": "critical" | "high" | "medium" | "low" | "info",',
+      '    "category": "short slug, e.g. cross-app-data-access",',
+      '    "title": "one-line summary",',
+      '    "risk": "2-4 sentences on why this matters",',
+      '    "evidence_class": "fully.qualified.ClassName",',
+      '    "evidence_method": "methodName(signature) or null",',
+      '    "evidence_source": "unit:<unit-name>",',
+      '    "proposed_patch": {',
+      '      "type": "config" | "code" | "remove" | "informational",',
+      '      "target": "field or method to change",',
+      '      "change": "concrete replacement (true->false, etc)",',
+      '      "rationale": "why this change addresses the risk"',
+      '    },',
+      '    "verification": "how a reviewer can confirm the fix"',
+      '  }',
+      ']',
+      '',
+      'Rules:',
+      '  • Only include findings backed by evidence in the reports.',
+      '  • 5-15 findings total.',
+      '  • critical/high: privacy red flags, cross-app data access,',
+      '    undisclosed identifier collection.',
+      '  • medium: permissions, tracking endpoints, reflection use.',
+      '  • low/info: documentation gaps, unused SDKs.',
+      '  • If a finding cannot be patched statically, use',
+      '    proposed_patch.type = "informational".',
+      '',
+      '=== INVESTIGATION REPORTS ===',
+      reports,
+    ].join('\n');
+  },
+
   coordinate(units: UnitRecord[], investigations: string[]): string {
     const reportBlocks = investigations.map((ans, i) =>
       '=== UNIT ' + (i + 1) + ': ' + (units[i]?.name || '?') + ' ===\n' + (ans || '(no answer)')

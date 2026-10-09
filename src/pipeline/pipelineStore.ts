@@ -1,6 +1,38 @@
 // CRUD for pipeline_jobs, pipeline_phases, pipeline_units.
 import { getDb } from '@/db/client';
 
+export interface FindingRecord {
+  id: string;
+  jobId: string;
+  unitId: string | null;
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  category: string;
+  title: string;
+  risk: string;
+  evidenceClass: string | null;
+  evidenceMethod: string | null;
+  evidenceSource: string | null;
+  patch: any;
+  verification: string | null;
+  appliedState: 'pending' | 'approved' | 'rejected' | 'applied' | 'failed';
+  createdAt: number;
+  decidedAt: number | null;
+  decisionNote: string | null;
+}
+
+export interface NewFinding {
+  unitId?: string | null;
+  severity: FindingRecord['severity'];
+  category: string;
+  title: string;
+  risk: string;
+  evidenceClass?: string | null;
+  evidenceMethod?: string | null;
+  evidenceSource?: string | null;
+  patch: any;
+  verification?: string | null;
+}
+
 export type JobState =
   | 'queued' | 'importing' | 'partitioning' | 'dispatching'
   | 'investigating' | 'coordinating' | 'proposing' | 'verifying'
@@ -62,7 +94,7 @@ export interface UnitRecord {
 
 export const PHASES_ORDER = [
   'import', 'partition', 'dispatch', 'investigate',
-  'coordinate', 'propose', 'verify', 'export', 'audit',
+  'coordinate', 'findings', 'propose', 'verify', 'apply', 'export', 'audit',
 ] as const;
 
 function uuid(): string {
@@ -127,6 +159,29 @@ function rowToUnit(r: any): UnitRecord {
     startedAt: r.started_at,
     finishedAt: r.finished_at,
     error: r.error,
+  };
+}
+
+function rowToFinding(r: any): FindingRecord {
+  let patch: any = null;
+  try { patch = JSON.parse(r.patch_json || 'null'); } catch {}
+  return {
+    id: r.id,
+    jobId: r.job_id,
+    unitId: r.unit_id,
+    severity: r.severity,
+    category: r.category,
+    title: r.title,
+    risk: r.risk,
+    evidenceClass: r.evidence_class,
+    evidenceMethod: r.evidence_method,
+    evidenceSource: r.evidence_source,
+    patch,
+    verification: r.verification,
+    appliedState: r.applied_state,
+    createdAt: r.created_at,
+    decidedAt: r.decided_at,
+    decisionNote: r.decision_note,
   };
 }
 
@@ -258,6 +313,149 @@ export const pipelineStore = {
       `UPDATE pipeline_phases SET state = 'done', finished_at = ?, summary = ? WHERE job_id = ? AND phase = ?`,
       [Date.now(), summary, jobId, phase]
     );
+  },
+
+  async createFindings(jobId: string, findings: NewFinding[]): Promise<number> {
+    if (!findings || findings.length === 0) return 0;
+    const db = await getDb();
+    const now = Date.now();
+    let inserted = 0;
+    for (const f of findings) {
+      try {
+        await db.runAsync(
+          `INSERT INTO findings
+           (id, job_id, unit_id, severity, category, title, risk,
+            evidence_class, evidence_method, evidence_source,
+            patch_json, verification, applied_state, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            uuid(),
+            jobId,
+            f.unitId ?? null,
+            f.severity || 'info',
+            f.category || 'uncategorized',
+            f.title || 'Untitled finding',
+            f.risk || '',
+            f.evidenceClass ?? null,
+            f.evidenceMethod ?? null,
+            f.evidenceSource ?? null,
+            JSON.stringify(f.patch ?? {}),
+            f.verification ?? null,
+            'pending',
+            now,
+          ],
+        );
+        inserted++;
+      } catch (e) {
+        console.warn('[pipelineStore] failed to insert finding:', e);
+      }
+    }
+    return inserted;
+  },
+
+  async listFindings(jobId: string): Promise<FindingRecord[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<any>(
+      `SELECT * FROM findings WHERE job_id = ?
+       ORDER BY CASE severity
+         WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+         WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+       created_at ASC`,
+      [jobId],
+    );
+    return rows.map(rowToFinding);
+  },
+
+  async listApprovedFindings(jobId: string): Promise<FindingRecord[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<any>(
+      `SELECT * FROM findings WHERE job_id = ? AND applied_state = 'approved'
+       ORDER BY CASE severity
+         WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+         WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
+      [jobId],
+    );
+    return rows.map(rowToFinding);
+  },
+
+  async setFindingState(
+    id: string,
+    state: FindingRecord['appliedState'],
+    note: string | null = null,
+  ): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE findings SET applied_state = ?, decided_at = ?, decision_note = ?
+       WHERE id = ?`,
+      [state, Date.now(), note, id],
+    );
+  },
+
+  async findingStats(jobId: string): Promise<{
+    total: number;
+    bySeverity: Record<string, number>;
+    byState: Record<string, number>;
+  }> {
+    const db = await getDb();
+    const sevRows = await db.getAllAsync<any>(
+      `SELECT severity, COUNT(*) AS n FROM findings WHERE job_id = ? GROUP BY severity`,
+      [jobId],
+    );
+    const stRows = await db.getAllAsync<any>(
+      `SELECT applied_state, COUNT(*) AS n FROM findings WHERE job_id = ? GROUP BY applied_state`,
+      [jobId],
+    );
+    const bySeverity: Record<string, number> = {};
+    const byState: Record<string, number> = {};
+    let total = 0;
+    for (const r of sevRows) {
+      bySeverity[r.severity] = r.n;
+      total += r.n;
+    }
+    for (const r of stRows) byState[r.applied_state] = r.n;
+    return { total, bySeverity, byState };
+  },
+
+  async getJobPlan(jobId: string): Promise<{
+    enhanced_apk?: string;
+    final_size?: number;
+    orchestration_verdict?: string;
+    integrity?: any;
+    signature?: any;
+    batches?: any[];
+    follow_back?: any[];
+    cross_batch?: any;
+    report_path?: string;
+    total_ms?: number;
+  } | null> {
+    const db = await getDb();
+    const row = await db.getFirstAsync<any>(
+      `SELECT plan_json FROM pipeline_jobs WHERE id = ?`, [jobId],
+    );
+    if (!row || !row.plan_json) return null;
+    try { return JSON.parse(row.plan_json); } catch { return null; }
+  },
+
+  async getPhaseTimings(jobId: string): Promise<Array<{
+    phase: string; state: string; startedAt: number | null;
+    finishedAt: number | null; durationMs: number | null; summary: string | null;
+  }>> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<any>(
+      `SELECT phase, state, started_at, finished_at, summary
+       FROM pipeline_phases WHERE job_id = ? ORDER BY rowid ASC`,
+      [jobId],
+    );
+    return rows.map(r => ({
+      phase: r.phase,
+      state: r.state,
+      startedAt: r.started_at,
+      finishedAt: r.finished_at,
+      durationMs: (r.started_at != null && r.finished_at != null)
+        ? (r.finished_at - r.started_at)
+        : null,
+      summary: r.summary,
+    }));
   },
 
   async failPhase(jobId: string, phase: string, error: string): Promise<void> {
