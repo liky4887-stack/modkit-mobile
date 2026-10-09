@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { getDb } from '@/db/client';
+import { guard } from '@/pipeline/resilience/guard';
 import { DB_NAME } from '@/db/schema';
 import { colors } from '@/theme/colors';
 import { Pressable } from 'react-native';
@@ -318,6 +319,34 @@ export default function SystemTab() {
               {agentResult}
             </Text>
           )}
+        </View>
+
+        <View style={styles.block}>
+          <Text style={styles.blockLabel}>RESILIENCE</Text>
+          {(() => {
+            const gs = guard.status();
+            return (
+              <>
+                <Text style={styles.blockMeta}>
+                  risk {(gs.risk.score * 100).toFixed(0)}%
+                  {gs.risk.topMode ? ' · ' + gs.risk.topMode : ''}
+                </Text>
+                <Text style={styles.blockMeta}>
+                  delay {gs.currentDelayMs}ms · retries {gs.retryBudget}
+                </Text>
+                {gs.paused && (
+                  <Text style={[styles.blockMeta, { color: colors.danger }]}>
+                    PAUSED — {gs.pausedReason}
+                  </Text>
+                )}
+                {gs.recentHeals.slice(-3).map((h, i) => (
+                  <Text key={i} style={styles.blockMeta}>
+                    · {h.mitigation} {h.applied ? 'applied' : 'suppressed'} — {h.detail}
+                  </Text>
+                ))}
+              </>
+            );
+          })()}
         </View>
 
         <View style={styles.block}>

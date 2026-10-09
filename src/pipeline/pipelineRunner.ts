@@ -62,6 +62,7 @@ export interface RunResult {
 // Uses termux-wake-lock via the backend to keep the CPU alive during
 // long agent runs. Released on completion.
 
+
 async function syncJobToBackend(jobId: string): Promise<void> {
   try {
     const job = await pipelineStore.getJob(jobId);
@@ -115,7 +116,7 @@ async function syncJobToBackend(jobId: string): Promise<void> {
       chats,
     };
 
-    await fetch('http://127.0.0.1:8790/orchestration/sync', {
+    await guardFetch('http://127.0.0.1:8790/orchestration/sync', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -127,7 +128,7 @@ async function syncJobToBackend(jobId: string): Promise<void> {
 
 async function acquireWakeLock(reason: string): Promise<boolean> {
   try {
-    const r = await fetch('http://127.0.0.1:8790/executeCommand', {
+    const r = await guardFetch('http://127.0.0.1:8790/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -144,7 +145,7 @@ async function acquireWakeLock(reason: string): Promise<boolean> {
 
 async function releaseWakeLock(): Promise<void> {
   try {
-    await fetch('http://127.0.0.1:8790/executeCommand', {
+    await guardFetch('http://127.0.0.1:8790/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -281,7 +282,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
   ctx.emit('import', 'start', 'verifying path');
   const path = ctx.job.apkPath;
 
-  const probe = await fetch('http://127.0.0.1:8790/executeCommand', {
+  const probe = await guardFetch('http://127.0.0.1:8790/executeCommand', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ command: 'ls', args: ['-la', path], timeoutMs: 5000 }),
@@ -291,7 +292,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
   }
 
   ctx.emit('import', 'running', 'loading into sidecar');
-  const load = await fetch('http://127.0.0.1:8790/tools/load', {
+  const load = await guardFetch('http://127.0.0.1:8790/tools/load', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ apk_path: path }),
@@ -448,6 +449,7 @@ async function phaseDispatch(ctx: PhaseContext): Promise<string> {
 // conversation at a time. Raise this via rateLimiter.reconfigure() once
 // we have distinct bearer tokens.
 import { globalRateLimiter } from '@/chat/rateLimiter';
+import { guardFetch, guard } from './resilience/guard';
 
 async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
   const units = await pipelineStore.listUnits(ctx.job.id);
@@ -753,7 +755,7 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
     // Try both the full descriptor and the simple name
     for (const q of [search, simple]) {
       try {
-        const r = await fetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
+        const r = await guardFetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: q, limit: 5 }),
@@ -913,7 +915,7 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
 
   // /file/write doesn't mkdir -p. Ensure the dir exists first.
   try {
-    await fetch('http://127.0.0.1:8790/executeCommand', {
+    await guardFetch('http://127.0.0.1:8790/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -956,7 +958,7 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
 
       const sha = await sha256Hex(body);
 
-      const res = await fetch('http://127.0.0.1:8790/file/write', {
+      const res = await guardFetch('http://127.0.0.1:8790/file/write', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: filePath, content: body }),
@@ -1061,7 +1063,7 @@ async function writeSbom(ctx: PhaseContext): Promise<string | null> {
 
     const outDir = '/storage/emulated/0/Download/modkit-reports/' + ctx.job.id;
     try {
-      await fetch('http://127.0.0.1:8790/executeCommand', {
+      await guardFetch('http://127.0.0.1:8790/executeCommand', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ command: 'mkdir', args: ['-p', outDir], timeoutMs: 5000 }),
@@ -1070,7 +1072,7 @@ async function writeSbom(ctx: PhaseContext): Promise<string | null> {
 
     const filePath = outDir + '/sbom.cyclonedx.json';
     const content = JSON.stringify(sbom, null, 2);
-    const res = await fetch('http://127.0.0.1:8790/file/write', {
+    const res = await guardFetch('http://127.0.0.1:8790/file/write', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: filePath, content }),
@@ -1226,10 +1228,9 @@ export const pipelineRunner = {
   } catch (err) {
     console.warn("[Pipeline] Fake Update Handshake warning:", err);
   }
- Verification
   try {
     if (typeof versionContinuityGuard !== "undefined" && versionContinuityGuard) {
-      console.log("[Pipeline] Verifying Version Continuity Guard
+      console.log("[Pipeline] Verifying Version Continuity Guard");
 
   // [SHΔDØW CORE] Fake Update Handshake Simulation
   try {
@@ -1239,10 +1240,9 @@ export const pipelineRunner = {
   } catch (err) {
     console.warn("[Pipeline] Fake Update Handshake warning:", err);
   }
- constraints...");
     }
   } catch (err) {
-    console.warn("[Pipeline] Version Continuity Guard
+    console.warn("[Pipeline] Version Continuity Guard warning:", err);
 
   // [SHΔDØW CORE] Fake Update Handshake Simulation
   try {
@@ -1252,7 +1252,6 @@ export const pipelineRunner = {
   } catch (err) {
     console.warn("[Pipeline] Fake Update Handshake warning:", err);
   }
- warning:", err);
   }
 
 // Phase 2 integration
