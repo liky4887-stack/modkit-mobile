@@ -155,55 +155,17 @@ export const TOOL_DEFS: ToolDef[] = [
       { name: 'limit', type: 'number', description: 'max results, default 500' },
     ],
   },
-];
-
-// ── Prompt rendering ─────────────────────────────────────────────
-export function renderToolList(): string {
-  const lines: string[] = [
-  // ─── REA (Reverse Engineer Anything) tools ────────────────────────
-  {
-    name: 'rea_decompile_class',
-    description: 'Decompile an Android class to Java source via headless JADX. More accurate than DexKit for complex classes. Returns Java source with line numbers.',
-    params: [
-      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
-      { name: 'class_name', type: 'string', required: true, description: 'fully-qualified class name (e.g. com.example.Foo)' },
-    ],
-  },
-  {
-    name: 'rea_get_manifest',
-    description: 'Extract and parse AndroidManifest.xml. Returns permissions, activities, services, receivers, providers, and intent filters as structured JSON.',
-    params: [
-      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
-    ],
-  },
-  {
-    name: 'rea_search_strings',
-    description: 'Search the APK string pool for a pattern (URL, key, secret, log tag). Returns matches with class context and evidence.',
-    params: [
-      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK on device' },
-      { name: 'pattern', type: 'string', required: true, description: 'substring or regex to search' },
-      { name: 'case_sensitive', type: 'boolean', description: 'case-sensitive match, default false' },
-    ],
-  },
-  {
-    name: 'rea_find_classes_by_reference',
-    description: 'Find every class that references a given method, class, or field. Cross-reference search with call-site context.',
-    params: [
-      { name: 'apk_path', type: 'string', required: true, description: 'absolute path to the APK' },
-      { name: 'target', type: 'string', required: true, description: 'method/class/field signature to search for' },
-    ],
-  },
   // ─── JADX high-fidelity decompilation ─────────────────────────────
   {
     name: 'jadx_decompile_class',
     description: 'Full Java decompilation via JADX CLI. Slower than decompile_class but produces much more readable source with proper generics, lambdas, and control flow. Use when DexKit output is unclear.',
     params: [
-      { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name (e.g. com.example.Foo)' },
+      { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name' },
     ],
   },
   {
     name: 'jadx_decompile_method',
-    description: 'Decompile a single method via JADX. Extracts just the method body from a full class decompile. Useful for focused review of one function.',
+    description: 'Decompile a single method via JADX. Extracts just the method body from a full class decompile.',
     params: [
       { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name' },
       { name: 'method', type: 'string', required: true, description: 'method name' },
@@ -211,22 +173,22 @@ export function renderToolList(): string {
   },
   {
     name: 'raw_manifest',
-    description: 'Full decoded AndroidManifest.xml as pretty-printed XML. Use when you need to see exact attribute values, intent-filter actions, or permissions not surfaced by the manifest summary.',
+    description: 'Full decoded AndroidManifest.xml as pretty-printed XML. Use when you need exact attribute values, intent-filter actions, or permissions not in the manifest summary.',
     params: [],
   },
-  // ─── Composite analysis (REA-style one-shot flows) ───────────────
+  // ─── Composite analysis (one-shot flows) ──────────────────────────
   {
     name: 'analyze_feature',
-    description: 'One-shot feature analysis. Given a keyword (e.g. "sentry", "frida", "okhttp"), finds matching classes and methods, then JADX-decompiles the top N classes and returns full Java source for each. Use this FIRST when investigating any feature — it replaces a manual hunt+decompile loop.',
+    description: 'One-shot feature analysis. Given a keyword (e.g. "sentry", "frida", "okhttp"), finds matching classes and methods, then JADX-decompiles the top N classes and returns full Java source for each. Use this FIRST when investigating any feature.',
     params: [
       { name: 'keyword', type: 'string', required: true, description: 'substring to search for in classes and methods' },
       { name: 'limit_classes', type: 'number', description: 'max classes to report, default 15' },
-      { name: 'limit_decompile', type: 'number', description: 'how many of the top classes to JADX-decompile, default 3' },
+      { name: 'limit_decompile', type: 'number', description: 'how many top classes to JADX-decompile, default 3' },
     ],
   },
   {
     name: 'trace_class',
-    description: 'Trace a class end-to-end. JADX-decompiles the target class, finds every call site pointing at it, and decompiles the top N callers. Use this to understand how a class is used across the app.',
+    description: 'Trace a class end-to-end. JADX-decompiles the target, finds every call site, and decompiles the top N callers.',
     params: [
       { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name to trace' },
       { name: 'decompile_limit', type: 'number', description: 'how many callers to decompile, default 3' },
@@ -235,7 +197,7 @@ export function renderToolList(): string {
   },
   {
     name: 'jadx_decompile_batch',
-    description: 'Decompile multiple classes in a single call. Cheaper than N separate jadx_decompile_class calls when you already have a target list.',
+    description: 'Decompile multiple classes in one call. Cheaper than N separate jadx_decompile_class calls.',
     params: [
       { name: 'fqcns', type: 'string[]', required: true, description: 'array of fully-qualified class names' },
       { name: 'limit', type: 'number', description: 'max classes to decompile, default 10' },
@@ -243,10 +205,39 @@ export function renderToolList(): string {
   },
   {
     name: 'evidence_report',
-    description: 'One-shot structured evidence bundle for the loaded APK. Runs manifest decode, permission callers, IOC extraction, permissive TLS detection, and content provider enumeration, all in one call. Use at the START of an investigation to get the full picture.',
+    description: 'One-shot structured evidence bundle. Runs manifest decode, permission callers, IOC extraction, permissive TLS detection, and content provider enumeration in one call. Use at the START of an investigation.',
     params: [],
   },
+  // ─── Additional analysis tools ────────────────────────────────────
+  {
+    name: 'jadx_cache_status',
+    description: 'Report which APKs have been dex-cached for JADX. Cached APKs skip dex extraction and complete ~3x faster.',
+    params: [],
+  },
+  {
+    name: 'list_dexes',
+    description: 'Return the count of dex files in the loaded APK. Useful for understanding code volume and multi-dex status.',
+    params: [],
+  },
+  {
+    name: 'list_external_method_refs',
+    description: 'List external method references — calls into classes outside the app. Useful for spotting SDK boundaries.',
+    params: [
+      { name: 'limit', type: 'number', description: 'max results, default 500' },
+    ],
+  },
+  {
+    name: 'list_external_type_refs',
+    description: 'List external type references — external classes pulled in from SDKs, framework, or bundled libs.',
+    params: [
+      { name: 'limit', type: 'number', description: 'max results, default 500' },
+    ],
+  },
 ];
+
+// ── Prompt rendering ─────────────────────────────────────────────
+export function renderToolList(): string {
+  const lines: string[] = [];
   for (const t of TOOL_DEFS) {
     lines.push('- ' + t.name + '(' + t.params.map(p => (p.required ? p.name : '[' + p.name + ']')).join(', ') + ')');
     lines.push('  ' + t.description);
