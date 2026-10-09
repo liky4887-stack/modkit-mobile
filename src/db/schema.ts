@@ -11,7 +11,7 @@ import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
 export const SCHEMA_VERSION = 15;
-export const DB_NAME = 'modkit-v2.db';
+export const DB_NAME = 'modkit-v3.db';
 
 export interface ScanRecord {
   id: string;

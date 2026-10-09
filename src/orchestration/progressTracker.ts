@@ -1,7 +1,7 @@
-import * as SQLite from 'expo-sqlite';
 import { PhaseId, SegmentStatus } from './types';
+import { getDb } from '@/db/client';
 
-async function db() { return SQLite.openDatabaseAsync('modkit.db'); }
+async function db() { return getDb(); }
 
 export interface ProgressSnapshot {
   overall: number;

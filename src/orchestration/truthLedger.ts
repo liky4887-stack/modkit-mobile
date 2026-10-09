@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { OffsetRange, PhaseId } from './types';
 import { eventBus } from './eventBus';
+import { getDb } from '@/db/client';
 
 export interface LedgerEntry {
   correlationId: string;
@@ -23,7 +24,7 @@ function uuid(): string {
 }
 
 async function db(): Promise<SQLite.SQLiteDatabase> {
-  return SQLite.openDatabaseAsync('modkit.db');
+  return getDb();
 }
 
 export const truthLedger = {

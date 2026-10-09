@@ -1,6 +1,6 @@
-import * as SQLite from 'expo-sqlite';
+import { getDb } from '@/db/client';
 
-async function db() { return SQLite.openDatabaseAsync('modkit.db'); }
+async function db() { return getDb(); }
 
 export interface AssetNode {
   id: string;

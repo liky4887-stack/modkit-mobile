@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, RefreshControl, TextInput,
 } from 'react-native';
 import * as SQLite from 'expo-sqlite';
+import { getDb } from '@/db/client';
+import { DB_NAME } from '@/db/schema';
 import { colors } from '@/theme/colors';
 import { Pressable } from 'react-native';
 import { deepseekClient } from '@/chat/deepseekClient';
@@ -27,13 +29,13 @@ interface SysStats {
 }
 
 async function load(): Promise<SysStats> {
-  const db = await SQLite.openDatabaseAsync('modkit.db');
+  const db = await getDb();
 
   let backendOk = false;
   let bearerValid = false;
   let cookiesLen = 0;
   try {
-    const res = await fetch('http://127.0.0.1:8790/deepseek/health');
+    const res = await fetch('http://127.0.0.1:8790/deepseek/health', { cache: 'no-store' });
     const json: any = await res.json();
     backendOk = json?.ok === true;
     bearerValid = json?.status?.bearerValid === true;
@@ -91,7 +93,7 @@ export default function SystemTab() {
 
   const dumpHttpToDisk = useCallback(async () => {
     try {
-      const db = await SQLite.openDatabaseAsync('modkit-v2.db');
+      const db = await getDb();
 
       const tables = [
         'pipeline_jobs',
@@ -320,7 +322,7 @@ export default function SystemTab() {
 
         <View style={styles.block}>
           <Text style={styles.blockLabel}>DATABASE</Text>
-          <Text style={styles.blockValue}>modkit.db</Text>
+          <Text style={styles.blockValue}>{DB_NAME}</Text>
           <Text style={styles.blockMeta}>
             schema v{s?.dbUserVersion ?? '?'} · WAL · foreign_keys ON
           </Text>

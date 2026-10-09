@@ -1,6 +1,8 @@
 // v13 — pipeline artifacts: real files on disk, recorded in SQLite.
 
 export const MIGRATION_V13 = `
+DROP TABLE IF EXISTS finding_artifacts;
+
 CREATE TABLE IF NOT EXISTS finding_artifacts (
   id              TEXT PRIMARY KEY,
   job_id          TEXT NOT NULL,

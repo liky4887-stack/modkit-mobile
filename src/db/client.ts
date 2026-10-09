@@ -4,12 +4,9 @@ import { DB_NAME, MIGRATIONS, SCHEMA_VERSION } from './schema';
 let _db: SQLite.SQLiteDatabase | null = null;
 let _opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  if (_opening) return _opening;
-
-  _opening = (async () => {
-    const db = await SQLite.openDatabaseAsync(DB_NAME);
+async function tryOpen(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync(DB_NAME);
+  try {
     await db.execAsync('PRAGMA journal_mode = WAL;');
     await db.execAsync('PRAGMA foreign_keys = ON;');
     await db.execAsync('PRAGMA synchronous = NORMAL;');
@@ -17,17 +14,63 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
     await migrate(db);
     const v = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
     console.log('[db] ready. user_version =', v?.user_version, 'target =', SCHEMA_VERSION);
-    _db = db;
-    _opening = null;
     return db;
-  })();
+  } catch (err) {
+    // CRITICAL: close the handle before rethrowing. If we don't, the
+    // native file stays locked and deleteDatabaseAsync in the caller
+    // cannot proceed. Every retry would leak another handle otherwise.
+    try { await db.closeAsync(); } catch (closeErr) {
+      console.warn('[db] close after fail also threw:', closeErr);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Open with self-heal. tryOpen() self-closes on failure so the file is
+ * released before we delete it. Then we wipe and retry once.
+ */
+async function openWithSelfHeal(): Promise<SQLite.SQLiteDatabase> {
+  try {
+    return await tryOpen();
+  } catch (firstErr) {
+    console.warn('[db] open failed, wiping and retrying:', firstErr);
+    try {
+      await SQLite.deleteDatabaseAsync(DB_NAME);
+      console.log('[db] wiped', DB_NAME, '(and sidecars)');
+    } catch (wipeErr) {
+      console.warn('[db] wipe failed:', wipeErr);
+      throw firstErr;
+    }
+    try {
+      return await tryOpen();
+    } catch (secondErr) {
+      console.error('[db] retry after wipe also failed:', secondErr);
+      throw secondErr;
+    }
+  }
+}
+
+export async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (_db) return _db;
+  if (_opening) return _opening;
+
+  _opening = openWithSelfHeal();
 
   try {
-    return await _opening;
-  } catch (e) {
+    const db = await _opening;
+    _db = db;
+    return db;
+  } finally {
     _opening = null;
-    throw e;
   }
+}
+
+/** Force a fresh DB — wipes the file and sidecars, then re-opens. */
+export async function resetDb(): Promise<SQLite.SQLiteDatabase> {
+  await closeDb();
+  try { await SQLite.deleteDatabaseAsync(DB_NAME); } catch {}
+  return getDb();
 }
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {

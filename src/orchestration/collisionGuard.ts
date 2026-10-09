@@ -1,8 +1,8 @@
-import * as SQLite from 'expo-sqlite';
 import { OffsetRange, PhaseId } from './types';
 import { eventBus } from './eventBus';
+import { getDb } from '@/db/client';
 
-async function db() { return SQLite.openDatabaseAsync('modkit.db'); }
+async function db() { return getDb(); }
 
 export interface CollisionProposal {
   scanId: string;

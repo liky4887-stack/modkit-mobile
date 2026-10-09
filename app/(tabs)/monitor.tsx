@@ -2,9 +2,9 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl, Pressable,
 } from 'react-native';
-import * as SQLite from 'expo-sqlite';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
+import { getDb } from '@/db/client';
 
 interface UnifiedRow {
   kind: 'event' | 'http';
@@ -15,7 +15,7 @@ interface UnifiedRow {
 }
 
 async function loadRows(limit = 200): Promise<UnifiedRow[]> {
-  const db = await SQLite.openDatabaseAsync('modkit.db');
+  const db = await getDb();
   const rows: UnifiedRow[] = [];
 
   const events = await db.getAllAsync<any>(

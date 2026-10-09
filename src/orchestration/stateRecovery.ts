@@ -1,7 +1,7 @@
-import * as SQLite from 'expo-sqlite';
 import { eventBus } from './eventBus';
+import { getDb } from '@/db/client';
 
-async function db() { return SQLite.openDatabaseAsync('modkit.db'); }
+async function db() { return getDb(); }
 
 export const stateRecovery = {
   async checkpoint(segmentId: string, status: string, partial?: unknown): Promise<void> {
