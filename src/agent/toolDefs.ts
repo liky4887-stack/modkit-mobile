@@ -214,6 +214,38 @@ export function renderToolList(): string {
     description: 'Full decoded AndroidManifest.xml as pretty-printed XML. Use when you need to see exact attribute values, intent-filter actions, or permissions not surfaced by the manifest summary.',
     params: [],
   },
+  // ─── Composite analysis (REA-style one-shot flows) ───────────────
+  {
+    name: 'analyze_feature',
+    description: 'One-shot feature analysis. Given a keyword (e.g. "sentry", "frida", "okhttp"), finds matching classes and methods, then JADX-decompiles the top N classes and returns full Java source for each. Use this FIRST when investigating any feature — it replaces a manual hunt+decompile loop.',
+    params: [
+      { name: 'keyword', type: 'string', required: true, description: 'substring to search for in classes and methods' },
+      { name: 'limit_classes', type: 'number', description: 'max classes to report, default 15' },
+      { name: 'limit_decompile', type: 'number', description: 'how many of the top classes to JADX-decompile, default 3' },
+    ],
+  },
+  {
+    name: 'trace_class',
+    description: 'Trace a class end-to-end. JADX-decompiles the target class, finds every call site pointing at it, and decompiles the top N callers. Use this to understand how a class is used across the app.',
+    params: [
+      { name: 'fqcn', type: 'string', required: true, description: 'fully-qualified class name to trace' },
+      { name: 'decompile_limit', type: 'number', description: 'how many callers to decompile, default 3' },
+      { name: 'caller_limit', type: 'number', description: 'max call sites to list, default 20' },
+    ],
+  },
+  {
+    name: 'jadx_decompile_batch',
+    description: 'Decompile multiple classes in a single call. Cheaper than N separate jadx_decompile_class calls when you already have a target list.',
+    params: [
+      { name: 'fqcns', type: 'string[]', required: true, description: 'array of fully-qualified class names' },
+      { name: 'limit', type: 'number', description: 'max classes to decompile, default 10' },
+    ],
+  },
+  {
+    name: 'evidence_report',
+    description: 'One-shot structured evidence bundle for the loaded APK. Runs manifest decode, permission callers, IOC extraction, permissive TLS detection, and content provider enumeration, all in one call. Use at the START of an investigation to get the full picture.',
+    params: [],
+  },
 ];
   for (const t of TOOL_DEFS) {
     lines.push('- ' + t.name + '(' + t.params.map(p => (p.required ? p.name : '[' + p.name + ']')).join(', ') + ')');
