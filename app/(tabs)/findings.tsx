@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl,
-  Pressable, ActivityIndicator,
+  Pressable, ActivityIndicator, TextInput,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
@@ -10,6 +10,9 @@ import {
   type FindingRecord,
   type JobRecord,
 } from '@/pipeline/pipelineStore';
+import { runStandaloneBots } from '@/pipeline/standaloneBots';
+import { exportReport } from '@/utils/botsReport';
+import * as Sharing from 'expo-sharing';
 
 const SEV_COLOR: Record<string, string> = {
   critical: '#FF3B30',
@@ -35,6 +38,11 @@ export default function FindingsTab() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [apkPath, setApkPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+  const [runBusy, setRunBusy] = useState(false);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   const load = useCallback(async (jobId: string | null) => {
     const recent = await pipelineStore.listJobs(10);
@@ -61,6 +69,25 @@ export default function FindingsTab() {
     setRefreshing(false);
   }, [load, activeJobId]);
 
+  const runBots = useCallback(async () => {
+    if (runBusy || !apkPath.trim()) return;
+    setRunBusy(true);
+    setRunStatus('running detectors...');
+    try {
+      const r = await runStandaloneBots(apkPath.trim());
+      setRunStatus(
+        r.findingsCount + ' findings in ' + r.wallMs + 'ms' +
+        (r.errors ? ' · ' + r.errors + ' errors' : '') +
+        (r.rejected ? ' · ' + r.rejected + ' rejected' : '')
+      );
+      await load(r.jobId);
+    } catch (e) {
+      setRunStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+    } finally {
+      setRunBusy(false);
+    }
+  }, [runBusy, apkPath, load]);
+
   const decide = useCallback(async (id: string, state: 'approved' | 'rejected') => {
     setBusy(id);
     try {
@@ -75,10 +102,88 @@ export default function FindingsTab() {
     setExpanded(e => ({ ...e, [id]: !e[id] }));
   }, []);
 
+  const onExport = useCallback(async () => {
+    if (exportBusy || !activeJobId) return;
+    setExportBusy(true);
+    setExportStatus('generating report...');
+    try {
+      const r = await exportReport(activeJobId);
+      setExportStatus('saved · ' + r.path);
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync('file://' + r.path, {
+          mimeType: 'text/markdown',
+          dialogTitle: 'Share security report',
+          UTI: 'net.daringfireball.markdown',
+        });
+      }
+    } catch (e) {
+      setExportStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+    } finally {
+      setExportBusy(false);
+    }
+  }, [exportBusy, activeJobId]);
+
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
         <Text style={styles.topBarTitle}>MODKIT · FINDINGS</Text>
+      </View>
+      <View style={styles.runSection}>
+        <TextInput
+          value={apkPath}
+          onChangeText={setApkPath}
+          style={styles.runInput}
+          placeholder="/storage/emulated/0/.../your.apk"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!runBusy}
+        />
+        <Pressable
+          onPress={runBots}
+          disabled={runBusy || !apkPath.trim()}
+          style={[styles.runBtn, (runBusy || !apkPath.trim()) && styles.runBtnDisabled]}
+        >
+          <Text style={styles.runBtnText}>
+            {runBusy ? 'RUNNING DETECTORS…' : 'RUN BOTS (STANDALONE)'}
+          </Text>
+        </Pressable>
+        {runStatus && (
+          <Text
+            style={[
+              styles.runStatus,
+              { color: runStatus.startsWith('FAIL') ? '#FF3B30' : colors.accent },
+            ]}
+            numberOfLines={2}
+          >
+            {runStatus}
+          </Text>
+        )}
+        <Pressable
+          onPress={onExport}
+          disabled={exportBusy || !activeJobId || findings.length === 0}
+          style={[
+            styles.runBtn,
+            { marginTop: 8, backgroundColor: '#1A3A5C' },
+            (exportBusy || !activeJobId || findings.length === 0) && styles.runBtnDisabled,
+          ]}
+        >
+          <Text style={[styles.runBtnText, { color: colors.accent }]}>
+            {exportBusy ? 'GENERATING REPORT…' : 'EXPORT REPORT (MARKDOWN)'}
+          </Text>
+        </Pressable>
+        {exportStatus && (
+          <Text
+            style={[
+              styles.runStatus,
+              { color: exportStatus.startsWith('FAIL') ? '#FF3B30' : colors.accent },
+            ]}
+            numberOfLines={2}
+          >
+            {exportStatus}
+          </Text>
+        )}
       </View>
       <ScrollView
         contentContainerStyle={styles.content}
@@ -220,6 +325,44 @@ export default function FindingsTab() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.pureBlack },
+  runSection: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm ?? 8,
+    paddingBottom: spacing.sm ?? 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  runInput: {
+    color: colors.textPrimary,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 10,
+    backgroundColor: colors.pureBlack,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    marginBottom: 6,
+  },
+  runBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 6,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  runBtnDisabled: { opacity: 0.5 },
+  runBtnText: {
+    color: colors.pureBlack,
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  runStatus: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 10,
+    marginTop: 6,
+    lineHeight: 14,
+  },
   topBar: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
