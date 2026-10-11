@@ -1,5 +1,5 @@
 // Standalone bot run — no pipeline, no LLM, no phases.
-// Loads an APK, runs the deterministic bot roster via /tools/bots_run,
+// Loads an APK, runs the deterministic bot roster via /tools/bots_run_manager,
 // writes findings to the local DB under a synthetic job row so the
 // FINDINGS tab can display them with the same code path it uses for
 // pipeline-produced findings.
@@ -14,6 +14,9 @@ export interface StandaloneBotsResult {
   errors: number;
   rejected: number;
   wallMs: number;
+  confidenceSummary?: Record<string, number>;
+  selfHealed?: number;
+  shadowRejected?: number;
 }
 
 export async function runStandaloneBots(apkPath: string): Promise<StandaloneBotsResult> {
@@ -24,7 +27,7 @@ export async function runStandaloneBots(apkPath: string): Promise<StandaloneBots
 
   try {
     const t0 = Date.now();
-    const r = await fetch(`${BACKEND}/tools/bots_run`, {
+    const r = await fetch(`${BACKEND}/tools/bots_run_manager`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: apkPath }),
@@ -60,6 +63,9 @@ export async function runStandaloneBots(apkPath: string): Promise<StandaloneBots
       errors: (j.errors || []).length,
       rejected: (j.rejected || []).length,
       wallMs: Date.now() - t0,
+      confidenceSummary: j.confidence_summary || undefined,
+      selfHealed: (j.self_healed || []).length,
+      shadowRejected: (j.shadow_rejections || []).length,
     };
   } catch (e) {
     await pipelineStore.setJobState(jobId, 'failed', (e as Error).message.slice(0, 200));

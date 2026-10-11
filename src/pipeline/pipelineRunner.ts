@@ -402,7 +402,7 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
   ctx.emit('bots', 'start', 'running deterministic detectors');
 
   try {
-    const r = await fetch(BACKEND + '/tools/bots_run', {
+    const r = await fetch(BACKEND + '/tools/bots_run_manager', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: APK }),
