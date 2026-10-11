@@ -93,9 +93,29 @@ export interface UnitRecord {
 }
 
 export const PHASES_ORDER = [
-  'import', 'bots', 'partition', 'dispatch', 'investigate',
-  'coordinate', 'findings', 'propose', 'verify', 'apply', 'export', 'audit',
+  // Deterministic chain — no LLM calls in the default path.
+  'import',       // load original + modified APK into sidecar
+  'decompile',    // disassemble classes*.dex to smali trees (both APKs)
+  'diff',         // enumerate every modification between the two APKs
+  'modBots',      // classify each modification (class / method / resource / permission / component / native)
+  'review_gate',  // pause — user marks items to revert (or leave alone) in the MODS tab
+  'revert',       // produce a clean APK with the marked items restored to original bytes
+  'export',       // markdown report + modification inventory JSON + clean APK path
+  'audit',        // counts
 ] as const;
+
+// Legacy LLM-driven phases remain available as an opt-in deep-dive chain
+// (see LLM_PHASES_ORDER below) but are no longer part of the default
+// pipeline. The deterministic chain above is what runs when you launch a
+// job — 0 DeepSeek calls.
+export const LLM_PHASES_ORDER = [
+  'bots', 'partition', 'dispatch', 'investigate',
+  'coordinate', 'findings', 'propose', 'verify', 'apply',
+] as const;
+
+export type PhaseId =
+  | typeof PHASES_ORDER[number]
+  | typeof LLM_PHASES_ORDER[number];
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -448,6 +468,67 @@ export const pipelineStore = {
     );
     if (!row || !row.plan_json) return null;
     try { return JSON.parse(row.plan_json); } catch { return null; }
+  },
+
+  async setReviewState(jobId: string, state: 'pending' | 'awaiting_user' | 'decided'): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE pipeline_jobs SET review_state = ?, updated_at = ? WHERE id = ?`,
+      [state, Date.now(), jobId],
+    );
+  },
+
+  async getReviewState(jobId: string): Promise<'pending' | 'awaiting_user' | 'decided'> {
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ review_state: string }>(
+      `SELECT review_state FROM pipeline_jobs WHERE id = ?`, [jobId],
+    );
+    return (row?.review_state as any) || 'pending';
+  },
+
+  async listModifications(jobId: string): Promise<Array<{
+    id: string; type: string; kind: string; target: string;
+    original: string | null; modified: string | null;
+    originalHash: string | null; modifiedHash: string | null; reverted: boolean;
+  }>> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<any>(
+      `SELECT id, type, kind, target, original, modified,
+              original_hash, modified_hash, reverted
+       FROM modifications WHERE job_id = ? ORDER BY kind, target`,
+      [jobId],
+    );
+    return rows.map(r => ({
+      id: r.id, type: r.type, kind: r.kind, target: r.target,
+      original: r.original, modified: r.modified,
+      originalHash: r.original_hash, modifiedHash: r.modified_hash,
+      reverted: r.reverted === 1,
+    }));
+  },
+
+  async setModificationReverted(modificationId: string, reverted: boolean): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE modifications SET reverted = ? WHERE id = ?`,
+      [reverted ? 1 : 0, modificationId],
+    );
+  },
+
+  async listRevertedModifications(jobId: string): Promise<Array<{
+    id: string; type: string; kind: string; target: string;
+    originalHash: string | null; modifiedHash: string | null;
+  }>> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<any>(
+      `SELECT id, type, kind, target, original_hash, modified_hash
+       FROM modifications WHERE job_id = ? AND reverted = 1
+       ORDER BY kind, target`,
+      [jobId],
+    );
+    return rows.map(r => ({
+      id: r.id, type: r.type, kind: r.kind, target: r.target,
+      originalHash: r.original_hash, modifiedHash: r.modified_hash,
+    }));
   },
 
   async getPhaseTimings(jobId: string): Promise<Array<{

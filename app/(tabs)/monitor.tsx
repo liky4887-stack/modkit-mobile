@@ -15,6 +15,7 @@ import {
   type PhaseRecord,
   type UnitRecord,
   type FindingRecord,
+  type PhaseId,
 } from '@/pipeline/pipelineStore';
 
 // ─── Plain language for each phase ───────────────────────────────
@@ -113,11 +114,11 @@ export default function MonitorTab() {
     );
 
     let completedMs = 0;
-    let currentPhase: string | null = null;
+    let currentPhase: PhaseId | null = null;
     let currentProgress = 0; // 0..1 within current phase
     let elapsedTotal = 0;
 
-    for (const ph of PHASES_ORDER) {
+    for (const ph of PHASES_ORDER as readonly PhaseId[]) {
       const rec = byName[ph];
       const est = PHASE_INFO[ph]?.estimateMs || 10_000;
       if (rec?.state === 'done') {
@@ -230,7 +231,7 @@ export default function MonitorTab() {
         {/* Task bullet list */}
         <View style={styles.block}>
           <Text style={styles.blockLabel}>TASKS</Text>
-          {PHASES_ORDER.map((ph) => {
+          {PHASES_ORDER.map((ph: PhaseId) => {
             const rec = derived?.byName[ph];
             const state = rec?.state || 'pending';
             const info = PHASE_INFO[ph];

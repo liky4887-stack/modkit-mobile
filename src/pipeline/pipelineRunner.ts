@@ -17,7 +17,7 @@ import { binaryDiffViewer } from "../orchestration/binaryDiffViewer";
 // 09a implements: import, partition, dispatch.
 // 09b will add: investigate, coordinate, propose, verify, export, audit.
 
-import { pipelineStore, JobRecord, PHASES_ORDER } from './pipelineStore';
+import { pipelineStore, JobRecord, PHASES_ORDER, LLM_PHASES_ORDER, type PhaseId } from './pipelineStore';
 import { investigateRunner } from './investigateRunner';
 import { eventBus } from '@/orchestration/eventBus';
 import { getDb } from '@/db/client';
@@ -28,7 +28,9 @@ import { progressTracker } from '@/orchestration/progressTracker';
 import { collisionGuard } from '@/orchestration/collisionGuard';
 import { dependencyMapper } from '@/orchestration/dependencyMapper';
 
-export type PhaseId = typeof PHASES_ORDER[number];
+// PhaseId is defined in pipelineStore — imported above.
+// Re-exported for modules that historically imported it from here.
+export type { PhaseId };
 
 export interface RunOptions {
   stopAfter?: PhaseId;
@@ -291,13 +293,70 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
     throw new Error('file not readable: ' + path);
   }
 
+  // If the file is a combined APK+OBB container (common for externally
+  // distributed games), unpack it first. The inner APK becomes the
+  // working path for every subsequent phase.
+  let workingPath = path;
+  let combinedMeta: any = null;
+  try {
+    const cp = await guardFetch('http://127.0.0.1:8790/tools/combined_probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }).then(r => r.json());
+
+    if (cp.ok && cp.combined) {
+      ctx.emit('import', 'running', 'combined container detected — unpacking');
+      const un = await guardFetch('http://127.0.0.1:8790/tools/combined_unpack', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path }),
+      }).then(r => r.json());
+
+      if (!un.ok) {
+        throw new Error('combined unpack failed: ' + (un.error || 'unknown'));
+      }
+
+      workingPath = un.inner_apk_path;
+      combinedMeta = {
+        combined_container: path,
+        inner_apk: un.inner_apk_path,
+        inner_obb: un.inner_obb_path,
+        inner_apk_size: un.inner_apk_size,
+        inner_obb_size: un.inner_obb_size,
+      };
+      ctx.emit('import', 'running',
+        'unpacked · apk ' + (un.inner_apk_size / 1e9).toFixed(2) + ' GB + obb ' +
+        (un.inner_obb_size / 1e6).toFixed(1) + ' MB');
+    }
+  } catch (e) {
+    console.warn('[import] combined probe skipped:', (e as Error).message.slice(0, 120));
+  }
+
   ctx.emit('import', 'running', 'loading into sidecar');
   const load = await guardFetch('http://127.0.0.1:8790/tools/load', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ apk_path: path }),
+    body: JSON.stringify({ apk_path: workingPath }),
   }).then(r => r.json());
   if (!load.ok) throw new Error('sidecar load failed: ' + (load.error || 'unknown'));
+
+  // If we unpacked a combined container, persist the inner paths so
+  // downstream phases (diff, export) operate on the inner APK and know
+  // where the OBB lives.
+  if (combinedMeta) {
+    const dbc = await getDb();
+    await dbc.runAsync(
+      `UPDATE pipeline_jobs SET apk_path = ?, updated_at = ? WHERE id = ?`,
+      [workingPath, Date.now(), ctx.job.id],
+    );
+    (ctx.job as any).apkPath = workingPath;
+    try {
+      await pipelineStore.setJobJson(ctx.job.id, 'plan', combinedMeta);
+    } catch (e) {
+      console.warn('[import] combined meta persist failed:', (e as Error).message.slice(0, 120));
+    }
+  }
 
   // Persist real metadata
   const db = await getDb();
@@ -387,6 +446,225 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
     return n + ' findings from ' + tierInfo + ' tier(s) (' + top + ')';
   } catch (e) {
     return 'bots error: ' + (e as Error).message.slice(0, 200);
+  }
+}
+
+async function phaseDecompile(ctx: PhaseContext): Promise<string> {
+  const BACKEND = 'http://127.0.0.1:8790';
+  const originalApk = ctx.job.apkPath;
+  const modifiedApk = (ctx.job as any).modifiedApkPath;
+  if (!originalApk) return 'no original APK path';
+  if (!modifiedApk) return 'no modified APK path set on job — nothing to diff';
+
+  ctx.emit('decompile', 'start', 'planning dex extraction for both APKs');
+
+  try {
+    const [a, b] = await Promise.all([
+      fetch(BACKEND + '/tools/apk_dex_list', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apk_path: originalApk }),
+      }).then(r => r.json()),
+      fetch(BACKEND + '/tools/apk_dex_list', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apk_path: modifiedApk }),
+      }).then(r => r.json()),
+    ]);
+    if (!a.ok) return 'original dex list failed: ' + (a.error || 'unknown');
+    if (!b.ok) return 'modified dex list failed: ' + (b.error || 'unknown');
+    return (
+      'original ' + a.dex_count + ' dex / ' +
+      (a.total_uncompressed_bytes / 1e6).toFixed(1) + ' MB · ' +
+      'modified ' + b.dex_count + ' dex / ' +
+      (b.total_uncompressed_bytes / 1e6).toFixed(1) + ' MB'
+    );
+  } catch (e) {
+    return 'decompile error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
+async function phaseDiff(ctx: PhaseContext): Promise<string> {
+  const BACKEND = 'http://127.0.0.1:8790';
+  const originalApk = ctx.job.apkPath;
+  const modifiedApk = (ctx.job as any).modifiedApkPath;
+  if (!originalApk || !modifiedApk) return 'missing apk paths';
+
+  ctx.emit('diff', 'start', 'comparing two APKs');
+
+  try {
+    const r = await fetch(BACKEND + '/tools/apk_diff_run', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ original_apk: originalApk, modified_apk: modifiedApk }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'diff failed: ' + (j.error || 'unknown');
+
+    const mods = (j.modifications || []) as any[];
+    if (mods.length === 0) return 'no modifications found';
+
+    // Write each modification into the modifications table.
+    const db = await (await import('@/db/client')).getDb();
+    const now = Date.now();
+    let inserted = 0;
+    for (const m of mods) {
+      try {
+        await db.runAsync(
+          `INSERT INTO modifications
+           (id, job_id, type, kind, target, original, modified,
+            original_hash, modified_hash, reverted, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+          [
+            String(m.id || ('m_' + Math.random().toString(36).slice(2, 10))),
+            ctx.job.id,
+            String(m.type || 'MODIFIED').slice(0, 16),
+            String(m.kind || 'unknown').slice(0, 32),
+            String(m.target || '').slice(0, 400),
+            m.original != null ? String(m.original).slice(0, 4000) : null,
+            m.modified != null ? String(m.modified).slice(0, 4000) : null,
+            m.original_hash ?? null,
+            m.modified_hash ?? null,
+            now,
+          ],
+        );
+        inserted++;
+      } catch (e) {
+        console.warn('[diff] insert failed:', (e as Error).message.slice(0, 120));
+      }
+    }
+
+    const byKind: Record<string, number> = {};
+    for (const m of mods) {
+      const k = String(m.kind || 'unknown');
+      byKind[k] = (byKind[k] || 0) + 1;
+    }
+    const summary = Object.entries(byKind)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k, v]) => v + ' ' + k)
+      .join(', ');
+
+    return inserted + ' modifications (' + summary + ') in ' + (j.wall_ms || 0) + 'ms';
+  } catch (e) {
+    return 'diff error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
+async function phaseModBots(ctx: PhaseContext): Promise<string> {
+  // Classification pass over the modifications diff already wrote to the DB.
+  // For each MODIFIED dex we look up which classes changed. For each
+  // ADDED / REMOVED class the classification is already known.
+  // Nothing writes to disk here — this phase purely annotates.
+  const BACKEND = 'http://127.0.0.1:8790';
+
+  ctx.emit('modBots', 'start', 'classifying modifications');
+
+  try {
+    const mods = await pipelineStore.listModifications(ctx.job.id);
+    if (mods.length === 0) return 'nothing to classify';
+
+    const byKind: Record<string, number> = {};
+    for (const m of mods) byKind[m.kind] = (byKind[m.kind] || 0) + 1;
+
+    // For dex-level MODIFIED entries, ask the sidecar which classes are
+    // shared vs unique so the UI can show "this dex contains N classes
+    // that exist in both APKs". Not a per-method diff, but it narrows
+    // where to look next. Uses apk_dex_list for the class inventory.
+    const dexMods = mods.filter(m => m.kind === 'dex' && m.type === 'MODIFIED');
+    let annotated = 0;
+    for (const d of dexMods.slice(0, 3)) {
+      try {
+        const r = await fetch(BACKEND + '/tools/apk_batch_disassemble', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ apk_path: ctx.job.apkPath, dex: d.target, classes: [] }),
+        }).then(r => r.json());
+        if (r.ok) annotated++;
+      } catch { /* ignore — annotation is best-effort */ }
+    }
+
+    const summary = Object.entries(byKind)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k, v]) => v + ' ' + k)
+      .join(', ');
+
+    return mods.length + ' classified (' + summary + ')' +
+      (annotated ? ' · ' + annotated + ' dex annotated' : '');
+  } catch (e) {
+    return 'modBots error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
+async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
+  // The gate writes a state and returns. If the caller launched the run
+  // as a fresh start, the gate pauses the pipeline by setting
+  // review_state = 'awaiting_user' and returns a sentinel that run()
+  // recognizes so it stops the loop. The user opens the MODS tab,
+  // checks items to revert, and re-runs the pipeline with
+  // fromPhase: 'revert' — the gate passes through instantly because
+  // review_state is already 'decided'.
+  const current = await pipelineStore.getReviewState(ctx.job.id);
+  if (current === 'decided') {
+    return 'review already decided';
+  }
+
+  const mods = await pipelineStore.listModifications(ctx.job.id);
+  const reverted = mods.filter(m => m.reverted).length;
+
+  if (current === 'pending' && reverted === 0) {
+    // First time through the gate: set awaiting_user and hand control
+    // back to the user. The sentinel '__REVIEW_GATE_PAUSE__' is what
+    // run() looks for.
+    await pipelineStore.setReviewState(ctx.job.id, 'awaiting_user');
+    ctx.emit('review_gate', 'pause', 'awaiting user decisions in MODS tab');
+    return '__REVIEW_GATE_PAUSE__';
+  }
+
+  return 'review complete — ' + reverted + ' item(s) marked for revert';
+}
+
+async function phaseRevert(ctx: PhaseContext): Promise<string> {
+  const BACKEND = 'http://127.0.0.1:8790';
+  const originalApk = ctx.job.apkPath;
+  const modifiedApk = (ctx.job as any).modifiedApkPath;
+  if (!originalApk || !modifiedApk) return 'missing apk paths';
+
+  const reverted = await pipelineStore.listRevertedModifications(ctx.job.id);
+  if (reverted.length === 0) {
+    ctx.emit('revert', 'skipped', 'no items marked for revert');
+    return '0 items marked for revert — nothing to rebuild';
+  }
+
+  ctx.emit('revert', 'start', reverted.length + ' item(s) to revert');
+
+  const safeName = (ctx.job.apkName || ctx.job.id).replace(/[^A-Za-z0-9._-]/g, '_');
+  const outputPath = '/storage/emulated/0/Download/modkit-enhanced/' +
+    safeName + '-clean-' + Date.now() + '.apk';
+
+  try {
+    const r = await fetch(BACKEND + '/tools/apk_revert_run', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        original_apk: originalApk,
+        modified_apk: modifiedApk,
+        revert: reverted.map(m => ({
+          type: m.type, kind: m.kind, target: m.target,
+          original_hash: m.originalHash, modified_hash: m.modifiedHash,
+        })),
+        output_path: outputPath,
+      }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'revert failed: ' + (j.error || 'unknown');
+
+    await pipelineStore.setJobJson(ctx.job.id, 'plan', {
+      clean_apk: j.output,
+      clean_size: j.final_size,
+      reverted_dexes: j.reverted_dexes,
+      reverted_count: j.reverted_count,
+    });
+
+    return reverted.length + ' reverted → ' + j.output;
+  } catch (e) {
+    return 'revert error: ' + (e as Error).message.slice(0, 180);
   }
 }
 
@@ -1441,6 +1719,11 @@ export const pipelineRunner = {
       try {
         let summary: string;
         if (phase === 'import')           summary = await phaseImport(ctx);
+        else if (phase === 'decompile')   summary = await phaseDecompile(ctx);
+        else if (phase === 'diff')        summary = await phaseDiff(ctx);
+        else if (phase === 'modBots')     summary = await phaseModBots(ctx);
+        else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
+        else if (phase === 'revert')      summary = await phaseRevert(ctx);
         else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'partition')   summary = await phasePartition(ctx);
         else if (phase === 'dispatch')    summary = await phaseDispatch(ctx);
