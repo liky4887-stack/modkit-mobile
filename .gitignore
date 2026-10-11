@@ -72,3 +72,5 @@ spec_check.txt
 src_files.txt
 *.log
 server.js
+.reports/
+scripts/
