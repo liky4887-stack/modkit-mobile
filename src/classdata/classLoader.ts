@@ -7,7 +7,7 @@ import { eventBus } from '@/orchestration/eventBus';
 const SF_HOME = '/data/data/com.termux/files/home/sovereign-factory';
 const DUMP_SCRIPT = SF_HOME + '/scripts/dump-classes.mjs';
 const CLASS_CACHE_DIR = '/data/data/com.termux/files/home/sovereign-core-data/modkit-classes';
-const FILE_READ_URL = 'http://127.0.0.1:8790/file/read';
+const FILE_READ_URL = 'http://127.0.0.1:8792/file/read';
 
 export interface LoadResult {
   scanId: string;

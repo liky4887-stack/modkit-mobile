@@ -118,7 +118,7 @@ async function syncJobToBackend(jobId: string): Promise<void> {
       chats,
     };
 
-    await guardFetch('http://127.0.0.1:8790/orchestration/sync', {
+    await guardFetch('http://127.0.0.1:8792/orchestration/sync', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -130,7 +130,7 @@ async function syncJobToBackend(jobId: string): Promise<void> {
 
 async function acquireWakeLock(reason: string): Promise<boolean> {
   try {
-    const r = await guardFetch('http://127.0.0.1:8790/executeCommand', {
+    const r = await guardFetch('http://127.0.0.1:8792/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -147,7 +147,7 @@ async function acquireWakeLock(reason: string): Promise<boolean> {
 
 async function releaseWakeLock(): Promise<void> {
   try {
-    await guardFetch('http://127.0.0.1:8790/executeCommand', {
+    await guardFetch('http://127.0.0.1:8792/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -284,12 +284,12 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
   ctx.emit('import', 'start', 'verifying path');
   const path = ctx.job.apkPath;
 
-  const probe = await guardFetch('http://127.0.0.1:8790/executeCommand', {
+  const probe = await guardFetch('http://127.0.0.1:8792/file/stat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ command: 'ls', args: ['-la', path], timeoutMs: 5000 }),
+    body: JSON.stringify({ path }),
   }).then(r => r.json());
-  if (!probe.ok || probe.result.exitCode !== 0) {
+  if (!probe.ok || !probe.exists) {
     throw new Error('file not readable: ' + path);
   }
 
@@ -299,7 +299,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
   let workingPath = path;
   let combinedMeta: any = null;
   try {
-    const cp = await guardFetch('http://127.0.0.1:8790/tools/combined_probe', {
+    const cp = await guardFetch('http://127.0.0.1:8792/tool/combined_probe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path }),
@@ -307,7 +307,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
 
     if (cp.ok && cp.combined) {
       ctx.emit('import', 'running', 'combined container detected — unpacking');
-      const un = await guardFetch('http://127.0.0.1:8790/tools/combined_unpack', {
+      const un = await guardFetch('http://127.0.0.1:8792/tool/combined_unpack', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path }),
@@ -334,7 +334,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
   }
 
   ctx.emit('import', 'running', 'loading into sidecar');
-  const load = await guardFetch('http://127.0.0.1:8790/tools/load', {
+  const load = await guardFetch('http://127.0.0.1:8792/load', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ apk_path: workingPath }),
@@ -396,7 +396,7 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
 // ── phase: partition ────────────────────────────────────
 
 async function phaseBots(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
   const APK = ctx.job.apkPath;
 
   ctx.emit('bots', 'start', 'running deterministic detectors');
@@ -450,7 +450,7 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseDecompile(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
   const originalApk = ctx.job.apkPath;
   const modifiedApk = (ctx.job as any).modifiedApkPath;
   if (!originalApk) return 'no original APK path';
@@ -483,7 +483,7 @@ async function phaseDecompile(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseDiff(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
   const originalApk = ctx.job.apkPath;
   const modifiedApk = (ctx.job as any).modifiedApkPath;
   if (!originalApk || !modifiedApk) return 'missing apk paths';
@@ -553,7 +553,7 @@ async function phaseModBots(ctx: PhaseContext): Promise<string> {
   // For each MODIFIED dex we look up which classes changed. For each
   // ADDED / REMOVED class the classification is already known.
   // Nothing writes to disk here — this phase purely annotates.
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
 
   ctx.emit('modBots', 'start', 'classifying modifications');
 
@@ -622,7 +622,7 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseRevert(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
   const originalApk = ctx.job.apkPath;
   const modifiedApk = (ctx.job as any).modifiedApkPath;
   if (!originalApk || !modifiedApk) return 'missing apk paths';
@@ -934,7 +934,7 @@ async function phaseApply(ctx: PhaseContext): Promise<string> {
   ctx.emit('apply', 'start', approved.length + ' approved findings');
 
   // Backend proxy base — same 8790 the rest of the app talks to.
-  const BACKEND = 'http://127.0.0.1:8790';
+  const BACKEND = 'http://127.0.0.1:8792';
 
   // 1. Resolve dex for each finding's evidence_class
   const findingsWithDex: any[] = [];
@@ -1308,7 +1308,7 @@ async function phaseVerify(ctx: PhaseContext): Promise<string> {
     // Try both the full descriptor and the simple name
     for (const q of [search, simple]) {
       try {
-        const r = await guardFetch('http://127.0.0.1:8790/tools/find_classes_by_name', {
+        const r = await guardFetch('http://127.0.0.1:8792/tool/find_classes_by_name', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: q, limit: 5 }),
@@ -1468,7 +1468,7 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
 
   // /file/write doesn't mkdir -p. Ensure the dir exists first.
   try {
-    await guardFetch('http://127.0.0.1:8790/executeCommand', {
+    await guardFetch('http://127.0.0.1:8792/executeCommand', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1511,7 +1511,7 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
 
       const sha = await sha256Hex(body);
 
-      const res = await guardFetch('http://127.0.0.1:8790/file/write', {
+      const res = await guardFetch('http://127.0.0.1:8792/file/write', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: filePath, content: body }),
@@ -1616,7 +1616,7 @@ async function writeSbom(ctx: PhaseContext): Promise<string | null> {
 
     const outDir = '/storage/emulated/0/Download/modkit-reports/' + ctx.job.id;
     try {
-      await guardFetch('http://127.0.0.1:8790/executeCommand', {
+      await guardFetch('http://127.0.0.1:8792/executeCommand', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ command: 'mkdir', args: ['-p', outDir], timeoutMs: 5000 }),
@@ -1625,7 +1625,7 @@ async function writeSbom(ctx: PhaseContext): Promise<string | null> {
 
     const filePath = outDir + '/sbom.cyclonedx.json';
     const content = JSON.stringify(sbom, null, 2);
-    const res = await guardFetch('http://127.0.0.1:8790/file/write', {
+    const res = await guardFetch('http://127.0.0.1:8792/file/write', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: filePath, content }),

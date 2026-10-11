@@ -1,7 +1,7 @@
 // Client wrapper for the DexKit tool sidecar, reached via the bridge at /tools/*.
 import { httpLog, preview } from './httpLog';
 
-const BASE = 'http://127.0.0.1:8790';
+const BASE = 'http://127.0.0.1:8792';
 
 async function call<T = any>(path: string, body: any = {}): Promise<T> {
   const url = BASE + path;

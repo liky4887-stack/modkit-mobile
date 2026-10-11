@@ -3,7 +3,7 @@
 import * as SQLite from 'expo-sqlite';
 import { getDb } from '@/db/client';
 
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8792';
 const DEFAULT_INTERVAL_MS = 10000;
 
 let _timer: ReturnType<typeof setInterval> | null = null;

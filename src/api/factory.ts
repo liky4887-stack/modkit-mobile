@@ -16,6 +16,11 @@ import { httpLog, preview } from './httpLog';
 
 export interface BuildLogLine { level: 'info' | 'ok' | 'warn' | 'error'; msg: string; ts: number; }
 
+// factory.ts talks to the backend on 8790 — it handles /projects/*,
+// /factory/*, /engines/* and other routes that don't exist on the
+// sidecar. The deterministic pipeline (pipelineRunner, standaloneBots,
+// modDiff, botsReport) calls the sidecar directly on 8792 with their
+// own base URL. Don't unify them — different concerns, different ports.
 export const FACTORY_BASE =
   process.env.EXPO_PUBLIC_FACTORY_URL ?? 'http://127.0.0.1:8790';
 

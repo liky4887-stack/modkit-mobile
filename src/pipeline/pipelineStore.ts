@@ -36,7 +36,9 @@ export interface NewFinding {
 export type JobState =
   | 'queued' | 'importing' | 'partitioning' | 'dispatching'
   | 'investigating' | 'coordinating' | 'proposing' | 'verifying'
-  | 'exporting' | 'auditing' | 'done' | 'failed' | 'cancelled';
+  | 'exporting' | 'auditing'
+  | 'waiting_review'                    // paused at review_gate
+  | 'done' | 'failed' | 'cancelled';
 
 export type PhaseState = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export type UnitState = 'queued' | 'running' | 'done' | 'failed' | 'skipped';

@@ -6,7 +6,7 @@ import { globalRateLimiter } from './rateLimiter';
 import { httpLog, preview } from '@/api/httpLog';
 import { eventBus } from '@/orchestration/eventBus';
 
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8790';  // DeepSeek chat still lives on the backend
 const CHAT_URL = BACKEND + '/deepseek/chat';
 
 export interface SendOptions {

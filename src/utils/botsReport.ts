@@ -5,7 +5,7 @@
 // via the backend's /file/write route (same one the pipeline export uses).
 import { pipelineStore, type FindingRecord, type JobRecord } from '@/pipeline/pipelineStore';
 
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8792';
 const REPORT_DIR = '/storage/emulated/0/Download/modkit-reports';
 
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;

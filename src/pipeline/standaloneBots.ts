@@ -5,7 +5,7 @@
 // pipeline-produced findings.
 import { pipelineStore } from './pipelineStore';
 
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8792';
 
 export interface StandaloneBotsResult {
   jobId: string;

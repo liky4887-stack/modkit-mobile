@@ -4,7 +4,7 @@
 // individual items — nothing is written back to any APK until the
 // recombine step, and the recombine step only produces an APK reverted
 // to the original bytes.
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8792';
 
 export interface Modification {
   id: string;

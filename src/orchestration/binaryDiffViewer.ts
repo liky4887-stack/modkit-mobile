@@ -1,6 +1,6 @@
 import { eventBus } from './eventBus';
 
-const BACKEND = 'http://127.0.0.1:8790';
+const BACKEND = 'http://127.0.0.1:8792';
 const SF_CWD = '/data/data/com.termux/files/home/sovereign-factory';
 
 export interface DiffRequest {
