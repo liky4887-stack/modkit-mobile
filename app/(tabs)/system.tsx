@@ -350,6 +350,73 @@ export default function SystemTab() {
         </View>
 
         <View style={styles.block}>
+          <Text style={styles.blockLabel}>DEBUG</Text>
+          <Pressable
+            onPress={async () => {
+              try {
+                const r = await fetch('http://127.0.0.1:8792/tool/debug_dump', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({}),
+                }).then(x => x.json());
+                if (r.ok) setTestResult('DEBUG DUMP OK · ' + r.path + ' · ' + r.events + ' events');
+                else setTestResult('DEBUG DUMP FAIL · ' + (r.error || 'unknown'));
+              } catch (e) {
+                setTestResult('DEBUG DUMP FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+              }
+            }}
+            style={[styles.testBtn, { backgroundColor: '#1A3A5C' }]}
+          >
+            <Text style={[styles.testBtnText, { color: colors.accent }]}>DUMP DEBUG LOG</Text>
+          </Pressable>
+          <Pressable
+            onPress={async () => {
+              try {
+                const r = await fetch('http://127.0.0.1:8792/tool/debug_counters', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({}),
+                }).then(x => x.json());
+                if (r.ok) {
+                  const c = r.counters || {};
+                  setTestResult(
+                    'DEBUG · total=' + r.total_events +
+                    ' ok=' + (c.ok || 0) +
+                    ' err=' + (c.error || 0) +
+                    ' jvm_timeout=' + (c.java_timeout || 0) +
+                    ' jvm_nonzero=' + (c.java_nonzero || 0) +
+                    ' uptime=' + r.uptime_s + 's'
+                  );
+                } else setTestResult('DEBUG FAIL · ' + (r.error || 'unknown'));
+              } catch (e) {
+                setTestResult('DEBUG FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+              }
+            }}
+            style={[styles.testBtn, { marginTop: 6, backgroundColor: '#1A3A5C' }]}
+          >
+            <Text style={[styles.testBtnText, { color: colors.accent }]}>SHOW DEBUG COUNTERS</Text>
+          </Pressable>
+          <Pressable
+            onPress={async () => {
+              try {
+                const r = await fetch('http://127.0.0.1:8792/tool/debug_clear', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({}),
+                }).then(x => x.json());
+                if (r.ok) setTestResult('DEBUG CLEARED · ' + r.cleared + ' events');
+                else setTestResult('DEBUG CLEAR FAIL · ' + (r.error || 'unknown'));
+              } catch (e) {
+                setTestResult('DEBUG CLEAR FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+              }
+            }}
+            style={[styles.testBtn, { marginTop: 6, backgroundColor: '#3A1A1A' }]}
+          >
+            <Text style={[styles.testBtnText, { color: '#FF9500' }]}>CLEAR DEBUG LOG</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.block}>
           <Text style={styles.blockLabel}>DATABASE</Text>
           <Text style={styles.blockValue}>{DB_NAME}</Text>
           <Text style={styles.blockMeta}>
