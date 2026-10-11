@@ -336,6 +336,60 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
 
 // ── phase: partition ────────────────────────────────────
 
+async function phaseBots(ctx: PhaseContext): Promise<string> {
+  const BACKEND = 'http://127.0.0.1:8790';
+  const APK = ctx.job.apkPath;
+
+  ctx.emit('bots', 'start', 'running deterministic detectors');
+
+  try {
+    const r = await fetch(BACKEND + '/tools/bots_run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: APK }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) {
+      return 'bots run failed: ' + (j.error || 'unknown');
+    }
+    const botFindings = j.findings || [];
+    if (botFindings.length === 0) {
+      return 'bots produced 0 findings';
+    }
+
+    const normalized = botFindings.map((f: any) => ({
+      unitId: null,
+      severity: f.severity || 'info',
+      category: f.category || 'bot-detection',
+      title: f.title || 'Untitled',
+      risk: f.risk || '',
+      evidenceClass: f.evidence_class || null,
+      evidenceMethod: f.evidence_method || null,
+      evidenceSource: f.evidence_source || 'bot:unknown',
+      patch: f.patch || {},
+      verification: f.verification || null,
+    }));
+
+    const n = await pipelineStore.createFindings(ctx.job.id, normalized);
+
+    const byCat: Record<string, number> = {};
+    for (const f of normalized) {
+      const cat = String(f.category).split(':')[0];
+      byCat[cat] = (byCat[cat] || 0) + 1;
+    }
+    const top = Object.entries(byCat)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k, v]) => v + ' ' + k)
+      .join(', ');
+
+    const tierInfo = Object.keys(j.tiers || {}).length;
+    return n + ' findings from ' + tierInfo + ' tier(s) (' + top + ')';
+  } catch (e) {
+    return 'bots error: ' + (e as Error).message.slice(0, 200);
+  }
+}
+
 async function phasePartition(ctx: PhaseContext): Promise<string> {
   ctx.emit('partition', 'start', 'agent proposes work units');
 
@@ -669,7 +723,7 @@ async function phaseApply(ctx: PhaseContext): Promise<string> {
     });
     const j: any = await r.json();
     if (!j.ok) {
-      return 'apply failed: ' + (j.error || 'unknown');
+      throw new Error('apply failed: ' + (j.error || 'unknown'));
     }
     // Persist the full orchestration report — every batch, every verdict,
     // every follow-back check is now auditable from the job record.
@@ -679,12 +733,32 @@ async function phaseApply(ctx: PhaseContext): Promise<string> {
       final_size: j.recombination?.final_size,
       integrity: j.recombination?.integrity,
       signature: j.recombination?.signature,
+      validation: j.validation,
       batches: j.batches,
       follow_back: j.follow_back,
       cross_batch: j.cross_batch,
       report_path: j.report_path,
       total_ms: j.total_ms,
     });
+
+    // Fail closed: a successful HTTP response is not proof of a valid APK.
+    // Persist the report above, but do not mark findings applied or continue
+    // to export unless every required final-artifact check explicitly passes.
+    const validation = j.validation;
+    if (
+      j.verdict !== 'all_applied' ||
+      !validation ||
+      validation.signature_ok !== true ||
+      validation.final_integrity_ok !== true ||
+      validation.follow_back_ok !== true
+    ) {
+      throw new Error(
+        'orchestration validation failed: verdict=' +
+        String(j.verdict || 'missing') +
+        ', validation=' +
+        JSON.stringify(validation ?? null).slice(0, 160)
+      );
+    }
 
     // Mark per-finding state from the orchestrator's per-patch verdicts.
     const verdictByFinding: Record<string, string> = {};
@@ -721,7 +795,7 @@ async function phaseApply(ctx: PhaseContext): Promise<string> {
       ' → ' + (j.recombination?.final_apk || 'no output')
     );
   } catch (e) {
-    return 'apply error: ' + (e as Error).message.slice(0, 200);
+    throw new Error('apply error: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200));
   }
 }
 
@@ -1367,6 +1441,7 @@ export const pipelineRunner = {
       try {
         let summary: string;
         if (phase === 'import')           summary = await phaseImport(ctx);
+        else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'partition')   summary = await phasePartition(ctx);
         else if (phase === 'dispatch')    summary = await phaseDispatch(ctx);
         else if (phase === 'investigate') summary = await phaseInvestigate(ctx);

@@ -93,7 +93,7 @@ export interface UnitRecord {
 }
 
 export const PHASES_ORDER = [
-  'import', 'partition', 'dispatch', 'investigate',
+  'import', 'bots', 'partition', 'dispatch', 'investigate',
   'coordinate', 'findings', 'propose', 'verify', 'apply', 'export', 'audit',
 ] as const;
 
@@ -313,6 +313,20 @@ export const pipelineStore = {
       `UPDATE pipeline_phases SET state = 'done', finished_at = ?, summary = ? WHERE job_id = ? AND phase = ?`,
       [Date.now(), summary, jobId, phase]
     );
+  },
+
+  async createStandaloneBotsJob(apkPath: string): Promise<string> {
+    const db = await getDb();
+    const id = uuid();
+    const now = Date.now();
+    const apkName = apkPath.split('/').pop() || 'unknown.apk';
+    await db.runAsync(
+      `INSERT INTO pipeline_jobs
+       (id, scan_id, apk_path, apk_name, state, started_at, updated_at)
+       VALUES (?,?,?,?,?,?,?)`,
+      [id, 'standalone-bots', apkPath, apkName, 'running', now, now],
+    );
+    return id;
   },
 
   async createFindings(jobId: string, findings: NewFinding[]): Promise<number> {
