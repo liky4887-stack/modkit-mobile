@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import { colors } from '@/theme/colors';
-import { Activity, Radio, MessageSquare, Settings, ShieldAlert } from 'lucide-react-native';
+import { Activity, Radio, MessageSquare, Settings, ShieldAlert, FileDiff } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
@@ -57,6 +57,15 @@ export default function TabLayout() {
           title: 'FINDINGS',
           tabBarIcon: ({ color, size }) => (
             <ShieldAlert size={size - 4} color={color} strokeWidth={2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="mods"
+        options={{
+          title: 'MODS',
+          tabBarIcon: ({ color, size }) => (
+            <FileDiff size={size - 4} color={color} strokeWidth={2} />
           ),
         }}
       />
