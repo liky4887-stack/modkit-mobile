@@ -44,6 +44,7 @@ export default function JobsTab() {
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   const [directPath, setDirectPath] = useState('');
+  const [directModifiedPath, setDirectModifiedPath] = useState('');
   const [directRunning, setDirectRunning] = useState(false);
   const [directStatus, setDirectStatus] = useState<string | null>(null);
   const [directSteps, setDirectSteps] = useState<string[]>([]);
@@ -114,6 +115,15 @@ export default function JobsTab() {
         apkSize: 0,
       });
       await pipelineStore.createPhasesForJob(job.id);
+
+      // Persist the reference path (if given) so the diff phase has a
+      // target to compare against. When empty, the pipeline runs the
+      // deterministic chain with no diff — modBots and revert become
+      // no-ops and only the phases that don't need a reference run.
+      const modifiedPath = directModifiedPath.trim();
+      if (modifiedPath) {
+        await pipelineStore.setModifiedApkPath(job.id, modifiedPath);
+      }
 
       const result = await pipelineRunner.run(job.id, {
         onPhase: (phase, state, summary) => {
@@ -193,9 +203,14 @@ export default function JobsTab() {
         )}
 
         <View style={styles.block}>
-          <Text style={styles.blockLabel}>RUN PIPELINE (import → partition → dispatch)</Text>
+          <Text style={styles.blockLabel}>RUN PIPELINE</Text>
           <Text style={styles.help}>
-            Reads the file in place via the backend. No copy, no disk needed.
+            Deterministic chain: import → decompile → diff → modBots → review_gate → revert → export → audit.
+            Zero LLM calls. Set the reference below to enable diff + revert.
+          </Text>
+
+          <Text style={[styles.blockLabel, { marginTop: 10, marginBottom: 6, fontSize: 9 }]}>
+            TARGET APK (required)
           </Text>
           <TextInput
             value={directPath}
@@ -204,16 +219,33 @@ export default function JobsTab() {
             autoCapitalize="none"
             autoCorrect={false}
             editable={!directRunning}
-            placeholder="/storage/emulated/0/.../your-app.apk"
+            placeholder="/storage/emulated/0/.../target.apk"
             placeholderTextColor={colors.textTertiary}
           />
+
+          <Text style={[styles.blockLabel, { marginTop: 10, marginBottom: 6, fontSize: 9 }]}>
+            REFERENCE APK (optional — enables diff)
+          </Text>
+          <TextInput
+            value={directModifiedPath}
+            onChangeText={setDirectModifiedPath}
+            style={styles.pathInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!directRunning}
+            placeholder="/storage/emulated/0/.../original.apk"
+            placeholderTextColor={colors.textTertiary}
+          />
+
           <Pressable
             onPress={runDirect}
             disabled={directRunning}
             style={[styles.runBtn, directRunning && { opacity: 0.5 }]}
           >
             <Text style={styles.runBtnText}>
-              {directRunning ? 'PIPELINE RUNNING…' : 'RUN PIPELINE'}
+              {directRunning
+                ? 'PIPELINE RUNNING…'
+                : (directModifiedPath.trim() ? 'RUN PIPELINE · DIFF MODE' : 'RUN PIPELINE · SCAN MODE')}
             </Text>
           </Pressable>
           {directStatus && (

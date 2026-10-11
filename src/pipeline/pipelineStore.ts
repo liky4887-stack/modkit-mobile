@@ -335,6 +335,14 @@ export const pipelineStore = {
     );
   },
 
+  async setModifiedApkPath(jobId: string, path: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE pipeline_jobs SET modified_apk_path = ?, updated_at = ? WHERE id = ?`,
+      [path || null, Date.now(), jobId],
+    );
+  },
+
   async createStandaloneBotsJob(apkPath: string): Promise<string> {
     const db = await getDb();
     const id = uuid();

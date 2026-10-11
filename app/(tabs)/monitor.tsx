@@ -20,17 +20,26 @@ import {
 
 // ─── Plain language for each phase ───────────────────────────────
 const PHASE_INFO: Record<string, { label: string; hint: string; estimateMs: number }> = {
-  import:      { label: 'Load the app',         hint: 'Reading the APK file into memory', estimateMs: 8_000 },
-  partition:   { label: 'Split into work',      hint: 'Finding SDKs and modules to inspect', estimateMs: 25_000 },
-  dispatch:    { label: 'Queue the work',       hint: 'Assigning each unit a slot',         estimateMs: 1_000 },
-  investigate: { label: 'Investigate each unit', hint: 'Deep dive — classes, SDKs, data flows', estimateMs: 1_800_000 },
-  coordinate:  { label: 'Combine findings',     hint: 'Merging every report into one plan', estimateMs: 30_000 },
-  findings:    { label: 'Write task list',      hint: 'Turning notes into actionable tasks', estimateMs: 90_000 },
-  propose:     { label: 'Draft the fixes',      hint: 'Writing what each fix should be',    estimateMs: 300_000 },
-  verify:      { label: 'Verify the fixes',     hint: 'Checking each fix is valid',         estimateMs: 90_000 },
-  apply:       { label: 'Build enhanced APK',   hint: 'Patching, re-signing the app',       estimateMs: 120_000 },
-  export:      { label: 'Save the results',     hint: 'Writing reports and artifacts',      estimateMs: 45_000 },
-  audit:       { label: 'Final check',          hint: 'Summary of the run',                 estimateMs: 2_000 },
+  // ── Deterministic chain (default) ─────────────────────────────
+  import:       { label: 'Load the app',            hint: 'Read APK (unpacks combined APK+OBB if needed)', estimateMs: 8_000 },
+  decompile:    { label: 'Plan dex extraction',     hint: 'List dex files in both APKs',                   estimateMs: 15_000 },
+  diff:         { label: 'Compare APKs',            hint: 'Find every modification between target and reference', estimateMs: 90_000 },
+  modBots:      { label: 'Classify modifications',  hint: 'Sort by class / method / resource / permission / native', estimateMs: 30_000 },
+  review_gate:  { label: 'Wait for your review',    hint: 'Open the MODS tab and mark items to revert',    estimateMs: 2_000 },
+  revert:       { label: 'Build clean APK',         hint: 'Restore reverted items and sign',               estimateMs: 120_000 },
+  export:       { label: 'Save the results',        hint: 'Write report, inventory JSON, clean APK path',  estimateMs: 45_000 },
+  audit:        { label: 'Final check',             hint: 'Summary of the run',                            estimateMs: 2_000 },
+
+  // ── LLM opt-in chain (LLM_PHASES_ORDER) ───────────────────────
+  bots:         { label: 'Run detectors',           hint: 'Deterministic scanner roster',                  estimateMs: 5_000 },
+  partition:    { label: 'Split into work',         hint: 'Finding SDKs and modules to inspect',           estimateMs: 25_000 },
+  dispatch:     { label: 'Queue the work',          hint: 'Assigning each unit a slot',                    estimateMs: 1_000 },
+  investigate:  { label: 'Investigate each unit',   hint: 'Deep dive — classes, SDKs, data flows',         estimateMs: 1_800_000 },
+  coordinate:   { label: 'Combine findings',        hint: 'Merging every report into one plan',            estimateMs: 30_000 },
+  findings:     { label: 'Write task list',         hint: 'Turning notes into actionable tasks',           estimateMs: 90_000 },
+  propose:      { label: 'Draft the fixes',         hint: 'Writing what each fix should be',               estimateMs: 300_000 },
+  verify:       { label: 'Verify the fixes',        hint: 'Checking each fix is valid',                    estimateMs: 90_000 },
+  apply:        { label: 'Build enhanced APK',      hint: 'Patching, re-signing the app',                  estimateMs: 120_000 },
 };
 
 function phaseIcon(state: string): string {
