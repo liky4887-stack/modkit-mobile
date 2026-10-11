@@ -52,6 +52,8 @@ export async function runStandaloneBots(apkPath: string): Promise<StandaloneBots
       evidenceSource: f.evidence_source || 'bot:unknown',
       patch: f.patch || {},
       verification: f.verification || null,
+      confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
+      confidenceBand: f.confidence_band ?? 'medium',
     }));
     await pipelineStore.createFindings(jobId, normalized);
     await pipelineStore.setJobState(jobId, 'done');

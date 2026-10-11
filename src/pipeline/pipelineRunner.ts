@@ -427,6 +427,8 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
       evidenceSource: f.evidence_source || 'bot:unknown',
       patch: f.patch || {},
       verification: f.verification || null,
+      confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
+      confidenceBand: f.confidence_band ?? 'medium',
     }));
 
     const n = await pipelineStore.createFindings(ctx.job.id, normalized);

@@ -14,6 +14,12 @@ import { runStandaloneBots } from '@/pipeline/standaloneBots';
 import { exportReport } from '@/utils/botsReport';
 import * as Sharing from 'expo-sharing';
 
+const CONF_COLOR: Record<string, string> = {
+  high: '#34C759',
+  medium: '#FFCC00',
+  low: '#FF9500',
+};
+
 const SEV_COLOR: Record<string, string> = {
   critical: '#FF3B30',
   high: '#FF9500',
@@ -247,8 +253,15 @@ export default function FindingsTab() {
           return (
             <Pressable key={f.id} onPress={() => toggle(f.id)} style={styles.findingCard}>
               <View style={styles.findingHeader}>
-                <View style={[styles.sevPill, { backgroundColor: sev }]}>
-                  <Text style={styles.sevPillText}>{f.severity.toUpperCase()}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={[styles.sevPill, { backgroundColor: sev }]}>
+                    <Text style={styles.sevPillText}>{f.severity.toUpperCase()}</Text>
+                  </View>
+                  <View style={[styles.confPill, { backgroundColor: CONF_COLOR[f.confidenceBand] || '#8E8E93' }]}>
+                    <Text style={styles.confPillText}>
+                      {(f.confidenceBand || 'medium').toUpperCase()} · {f.confidence.toFixed(2)}
+                    </Text>
+                  </View>
                 </View>
                 <Text style={[styles.stateText, { color: stColor }]}>{f.appliedState}</Text>
               </View>
@@ -450,6 +463,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 3,
+  },
+  confPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 3,
+  },
+  confPillText: {
+    color: colors.pureBlack,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 8,
+    letterSpacing: 0.5,
   },
   sevPillText: {
     color: colors.pureBlack,

@@ -15,6 +15,8 @@ export interface FindingRecord {
   patch: any;
   verification: string | null;
   appliedState: 'pending' | 'approved' | 'rejected' | 'applied' | 'failed';
+  confidence: number;
+  confidenceBand: 'high' | 'medium' | 'low';
   createdAt: number;
   decidedAt: number | null;
   decisionNote: string | null;
@@ -31,6 +33,8 @@ export interface NewFinding {
   evidenceSource?: string | null;
   patch: any;
   verification?: string | null;
+  confidence?: number | null;
+  confidenceBand?: 'high' | 'medium' | 'low' | null;
 }
 
 export type JobState =
@@ -201,6 +205,8 @@ function rowToFinding(r: any): FindingRecord {
     patch,
     verification: r.verification,
     appliedState: r.applied_state,
+    confidence: r.confidence ?? 0.8,
+    confidenceBand: (r.confidence_band as any) ?? 'medium',
     createdAt: r.created_at,
     decidedAt: r.decided_at,
     decisionNote: r.decision_note,
@@ -370,8 +376,9 @@ export const pipelineStore = {
           `INSERT INTO findings
            (id, job_id, unit_id, severity, category, title, risk,
             evidence_class, evidence_method, evidence_source,
-            patch_json, verification, applied_state, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            patch_json, verification, applied_state, created_at,
+            confidence, confidence_band)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
             uuid(),
             jobId,
@@ -387,6 +394,8 @@ export const pipelineStore = {
             f.verification ?? null,
             'pending',
             now,
+            typeof f.confidence === 'number' ? f.confidence : 0.8,
+            f.confidenceBand ?? 'medium',
           ],
         );
         inserted++;
