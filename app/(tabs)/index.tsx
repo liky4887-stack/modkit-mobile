@@ -370,14 +370,13 @@ export default function JobsTab() {
         {/* FINDINGS — bot + feature hits for THIS job */}
         {jobFindings.length > 0 && (() => {
           const bySev: Record<string, number> = {};
-          const bySource: Record<string, number> = { bot: 0, feature: 0 };
+          const bySource: Record<string, number> = { bot: 0, feature: 0, nested: 0 };
           for (const f of jobFindings) {
             bySev[f.severity] = (bySev[f.severity] || 0) + 1;
             const src = (f.evidenceSource || '');
-            // feature_hunt writes 'feature_hunt:<class>:<src>';
-            // everything else in this job is a bot finding.
-            if (src.startsWith('feature_hunt')) bySource.feature++;
-            else                                bySource.bot++;
+            if (src.startsWith('feature_hunt'))    bySource.feature++;
+            else if (src.startsWith('nested'))     bySource.nested++;
+            else                                    bySource.bot++;
           }
           const sevOrder = ['critical', 'high', 'medium', 'low', 'info'];
           return (
@@ -386,7 +385,8 @@ export default function JobsTab() {
                 {'FINDINGS · ' + jobFindings.length}
               </Text>
               <Text style={styles.help}>
-                {'bot: ' + bySource.bot + ' · feature: ' + bySource.feature}
+                {'bot: ' + bySource.bot + ' · feature: ' + bySource.feature +
+                 (bySource.nested ? ' · nested: ' + bySource.nested : '')}
               </Text>
               <View style={styles.grid}>
                 {sevOrder.map(sev => (
@@ -413,6 +413,7 @@ export default function JobsTab() {
                   {jobFindings.slice(0, 60).map(f => {
                     const src = (f.evidenceSource || '');
                     const tag = src.startsWith('feature_hunt') ? 'FEAT'
+                              : src.startsWith('nested')       ? 'NEST'
                               : src.startsWith('bot')          ? 'BOT'
                               : 'OTH';
                     return (
