@@ -573,12 +573,10 @@ async function phaseNested(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
-  // The review gate is the aggregation point for the whole pre-gate
-  // chain. Every phase before this one — diff, modBots, bots, features,
-  // nested — writes its work into the same job. This function collects
-  // ALL of it (modifications + findings from every source), produces
-  // one summary, and pauses with the complete picture attached. The
-  // user reviews against the whole story, not just the mod list.
+  // Review gate — the pause point where the user sees the analysis
+  // result and decides whether to proceed. In single-APK mode this is
+  // the whole picture: the mod signals from feature_hunt are the
+  // answer; bot detections and framework markers are context.
   const current = await pipelineStore.getReviewState(ctx.job.id);
   if (current === 'decided') {
     return 'review already decided';
@@ -588,54 +586,68 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   const findings = await pipelineStore.listFindings(ctx.job.id);
   const reverted = mods.filter(m => m.reverted).length;
 
-  // ── Source split for findings ─────────────────────────────────
-  const bySource = { bot: 0, feature: 0, nested: 0, other: 0 };
+  // ── Bucket findings by what the user actually cares about ─────
+  //   mod_signals       feature_hunt:mod_artifact:*  → ESP, aimbot, menu
+  //   defense_signals   feature_hunt:anti_tamper:*   → game's own defenses
+  //   framework_signals feature_hunt:framework_*     → stock SDKs
+  //   nested_signals    nested_diff                  → wrapper analysis
+  //   sdk_findings      everything else              → bot roster noise
+  const mod_signals: any[] = [];
+  const defense_signals: any[] = [];
+  const framework_signals: any[] = [];
+  const nested_signals: any[] = [];
+  let sdk_findings_count = 0;
+
   for (const f of findings) {
     const src = f.evidenceSource || '';
-    if (src.startsWith('feature_hunt'))      bySource.feature++;
-    else if (src.startsWith('nested'))       bySource.nested++;
-    else if (src.startsWith('bot') || src.toLowerCase().includes('bot'))
-                                             bySource.bot++;
-    else                                     bySource.other++;
+    if (src.startsWith('feature_hunt:mod_artifact'))      mod_signals.push(f);
+    else if (src.startsWith('feature_hunt:anti_tamper'))  defense_signals.push(f);
+    else if (src.startsWith('feature_hunt:framework'))    framework_signals.push(f);
+    else if (src.startsWith('nested'))                    nested_signals.push(f);
+    else                                                   sdk_findings_count++;
   }
 
-  // ── Severity split ────────────────────────────────────────────
+  // Severity split for the full set (kept for back-compat + UI)
   const bySeverity: Record<string, number> = {};
   for (const f of findings) {
     bySeverity[f.severity] = (bySeverity[f.severity] || 0) + 1;
   }
 
-  // ── Correlations: mods that also appear in a finding ─────────
-  // If the diff flagged a class and a feature hit or bot hit also
-  // mentions that class (evidenceClass substring match), we surface
-  // the connection so the user reviews it as one signal, not two.
-  const correlations: Array<{ mod: string; findings: string[] }> = [];
-  for (const m of mods) {
-    const hits: string[] = [];
-    for (const f of findings) {
-      const ev = (f.evidenceClass || '') + ' ' + (f.evidenceMethod || '');
-      if (ev.length > 0 && m.target && ev.includes(m.target.split('.').pop() || '')) {
-        hits.push(f.title);
-        if (hits.length >= 5) break;
-      }
-    }
-    if (hits.length > 0) {
-      correlations.push({ mod: m.target, findings: hits });
-      if (correlations.length >= 30) break;
-    }
-  }
-
   const summary = {
+    // Foreground — what the user asked for
+    mod_signals: mod_signals.map(f => ({
+      title: f.title,
+      category: f.category,
+      confidence: f.confidence,
+      evidence_source: f.evidenceSource,
+      evidence_method: f.evidenceMethod,
+      risk: f.risk,
+    })),
+    defense_signals: defense_signals.map(f => ({
+      title: f.title, category: f.category, confidence: f.confidence,
+    })),
+    framework_signals: framework_signals.map(f => ({
+      title: f.title, category: f.category, confidence: f.confidence,
+    })),
+    nested_signals: nested_signals.map(f => ({
+      title: f.title, risk: f.risk, confidence: f.confidence,
+    })),
+    // Background count so the user knows the bot roster ran
+    sdk_findings_count,
+    // Legacy fields (kept so nothing else breaks)
     modifications: mods.length,
     reverted,
     findings_total: findings.length,
-    findings_by_source: bySource,
     findings_by_severity: bySeverity,
-    correlations,
+    findings_by_source: {
+      bot: sdk_findings_count,
+      feature: mod_signals.length + defense_signals.length + framework_signals.length,
+      nested: nested_signals.length,
+      other: 0,
+    },
+    correlations: [] as Array<{ mod: string; findings: string[] }>,
   };
 
-  // ── Persist into plan (merge, don't overwrite — phaseRevert also
-  //     writes to plan later with clean_apk etc.) ────────────────
   const existingPlan = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
   await pipelineStore.setJobJson(ctx.job.id, 'plan', {
     ...existingPlan,
@@ -643,22 +655,15 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   });
 
   if (current === 'pending' && reverted === 0) {
-    // First time through: pause. The sentinel '__REVIEW_GATE_PAUSE__'
-    // halts run().
     await pipelineStore.setReviewState(ctx.job.id, 'awaiting_user');
-    const pauseMsg =
-      mods.length + ' mods · ' + findings.length + ' findings (' +
-      bySource.bot + ' bot / ' + bySource.feature + ' feat / ' +
-      bySource.nested + ' nest)' +
-      (correlations.length ? ' · ' + correlations.length + ' correlated' : '');
+    const pauseMsg = mod_signals.length > 0
+      ? mod_signals.length + ' mod signal(s) detected · ' + mods.length + ' mods'
+      : 'no mod signals · ' + mods.length + ' mods';
     ctx.emit('review_gate', 'pause', pauseMsg);
     return '__REVIEW_GATE_PAUSE__';
   }
 
-  return (
-    'review complete — ' + reverted + ' mod(s) marked · ' +
-    findings.length + ' findings aggregated'
-  );
+  return 'review complete — ' + reverted + ' mod(s) marked';
 }
 
 async function phaseRevert(ctx: PhaseContext): Promise<string> {
@@ -842,7 +847,18 @@ export const pipelineRunner = {
 
     const ctx: PhaseContext = { job, emit, onStep: opts.onStep };
 
-    const phases = PHASES_ORDER.slice() as PhaseId[];
+    // Single-APK mode: no reference → skip every phase that only makes
+    // sense when comparing two APKs. The features/bots/nested phases
+    // work fine on one APK alone and are what the user actually cares
+    // about when analyzing a suspicious mod.
+    let phases = PHASES_ORDER.slice() as PhaseId[];
+    const hasReference = !!(job as any).modifiedApkPath;
+    if (!hasReference) {
+      const SKIP_NO_REF = new Set<PhaseId>([
+        'decompile' as any, 'diff' as any, 'modBots' as any, 'revert' as any,
+      ]);
+      phases = phases.filter(p => !SKIP_NO_REF.has(p));
+    }
     const stopAfterIdx = opts.stopAfter ? phases.indexOf(opts.stopAfter) : phases.length - 1;
 
     await pipelineStore.setJobState(jobId, 'queued');
