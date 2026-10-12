@@ -333,12 +333,73 @@ export default function JobsTab() {
             )}
 
             {/* ── SDK roster footer ────────────────────────────── */}
-            {preGate.sdk_findings_count > 0 && (
-              <Text style={styles.sdkFooter}>
-                {preGate.sdk_findings_count + ' SDK / bot observation' +
-                 (preGate.sdk_findings_count === 1 ? '' : 's') +
-                 ' — tap FINDINGS below for the full list'}
-              </Text>
+            {/* ── ALL FINDINGS — every row, in this same block ── */}
+            {jobFindings.length > 0 && (
+              <View style={{ marginTop: 16 }}>
+                <Text style={styles.sectionHeader}>
+                  {'ALL FINDINGS · ' + jobFindings.length}
+                </Text>
+                <View style={styles.grid}>
+                  {['critical', 'high', 'medium', 'low', 'info'].map(sev => {
+                    const n = jobFindings.filter(f => f.severity === sev).length;
+                    if (!n) return null;
+                    return (
+                      <View key={sev} style={styles.gridCell}>
+                        <Text style={[styles.gridNum, { color: SEV_COLOR[sev] }]}>
+                          {n}
+                        </Text>
+                        <Text style={styles.gridLabel}>{sev.slice(0, 4).toUpperCase()}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <Pressable
+                  onPress={() => setShowFindings(v => !v)}
+                  style={[styles.miniBtn, { marginTop: 10, alignSelf: 'flex-start' }]}
+                >
+                  <Text style={styles.miniText}>
+                    {showFindings
+                      ? 'HIDE LIST'
+                      : 'SHOW LIST (' + jobFindings.length + ')'}
+                  </Text>
+                </Pressable>
+
+                {showFindings && (
+                  <View style={{ marginTop: 8 }}>
+                    {jobFindings.slice(0, 200).map(f => {
+                      const src = (f.evidenceSource || '');
+                      const tag = src.startsWith('feature_hunt') ? 'FEAT'
+                                : src.startsWith('nested')       ? 'NEST'
+                                : src.startsWith('bot')          ? 'BOT'
+                                : 'OTH';
+                      return (
+                        <View key={f.id} style={styles.findingRow}>
+                          <View style={[styles.sevPill, { backgroundColor: SEV_COLOR[f.severity] || '#8E8E93' }]}>
+                            <Text style={styles.sevPillText}>
+                              {f.severity.slice(0, 4).toUpperCase()}
+                            </Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.findingTitle} numberOfLines={2}>
+                              {f.title}
+                            </Text>
+                            <Text style={styles.findingMeta}>
+                              {tag + ' · ' + f.category +
+                               (f.confidenceBand ? ' · ' + f.confidenceBand : '')}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                    {jobFindings.length > 200 && (
+                      <Text style={styles.help}>
+                        {'…' + (jobFindings.length - 200) + ' more'}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </View>
             )}
 
             <Pressable
@@ -353,84 +414,6 @@ export default function JobsTab() {
           </View>
         )}
 
-        {/* FINDINGS — bot + feature hits for THIS job */}
-        {jobFindings.length > 0 && (() => {
-          const bySev: Record<string, number> = {};
-          const bySource: Record<string, number> = { bot: 0, feature: 0, nested: 0 };
-          for (const f of jobFindings) {
-            bySev[f.severity] = (bySev[f.severity] || 0) + 1;
-            const src = (f.evidenceSource || '');
-            if (src.startsWith('feature_hunt'))    bySource.feature++;
-            else if (src.startsWith('nested'))     bySource.nested++;
-            else                                    bySource.bot++;
-          }
-          const sevOrder = ['critical', 'high', 'medium', 'low', 'info'];
-          return (
-            <View style={styles.block}>
-              <Text style={styles.blockLabel}>
-                {'FINDINGS · ' + jobFindings.length}
-              </Text>
-              <Text style={styles.help}>
-                {'bot: ' + bySource.bot + ' · feature: ' + bySource.feature +
-                 (bySource.nested ? ' · nested: ' + bySource.nested : '')}
-              </Text>
-              <View style={styles.grid}>
-                {sevOrder.map(sev => (
-                  <View key={sev} style={styles.gridCell}>
-                    <Text style={[styles.gridNum, { color: SEV_COLOR[sev] }]}>
-                      {bySev[sev] || 0}
-                    </Text>
-                    <Text style={styles.gridLabel}>{sev}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <Pressable
-                onPress={() => setShowFindings(v => !v)}
-                style={[styles.miniBtn, { marginTop: 10, alignSelf: 'flex-start' }]}
-              >
-                <Text style={styles.miniText}>
-                  {showFindings ? 'HIDE LIST' : 'SHOW LIST (' + jobFindings.length + ')'}
-                </Text>
-              </Pressable>
-
-              {showFindings && (
-                <View style={{ marginTop: 8 }}>
-                  {jobFindings.slice(0, 60).map(f => {
-                    const src = (f.evidenceSource || '');
-                    const tag = src.startsWith('feature_hunt') ? 'FEAT'
-                              : src.startsWith('nested')       ? 'NEST'
-                              : src.startsWith('bot')          ? 'BOT'
-                              : 'OTH';
-                    return (
-                      <View key={f.id} style={styles.findingRow}>
-                        <View style={[styles.sevPill, { backgroundColor: SEV_COLOR[f.severity] || '#8E8E93' }]}>
-                          <Text style={styles.sevPillText}>{f.severity.slice(0, 4).toUpperCase()}</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.findingTitle} numberOfLines={2}>
-                            {f.title}
-                          </Text>
-                          <Text style={styles.findingMeta}>
-                            {tag + ' · ' + f.category +
-                             (f.confidenceBand ? ' · ' + f.confidenceBand : '')}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
-                  {jobFindings.length > 60 && (
-                    <Text style={styles.help}>
-                      {'…' + (jobFindings.length - 60) + ' more — see FINDINGS tab'}
-                    </Text>
-                  )}
-                </View>
-              )}
-            </View>
-          );
-        })()}
-
-        {/* Recent jobs */}
         <View style={styles.block}>
           <Text style={styles.blockLabel}>RECENT</Text>
           <RecentJobs onPick={(id) => loadJob(id)} />
