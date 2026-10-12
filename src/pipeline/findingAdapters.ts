@@ -88,3 +88,25 @@ export function featureReportToRows(report: any): NewFinding[] {
   }
   return rows;
 }
+
+// ── Nested APK diff → findings ────────────────────────────────────
+// The sidecar returns findings[] already in near-final shape. We
+// normalise field names (snake_case → camel) and add the adapter's
+// standard wrapping.
+export function nestedDiffToRows(report: any): NewFinding[] {
+  const raw = report && Array.isArray(report.findings) ? report.findings : [];
+  return raw.map((f: any) => ({
+    unitId: null,
+    severity: f.severity || 'info',
+    category: f.category || 'nested_container',
+    title: f.title || 'Nested APK',
+    risk: f.risk || '',
+    evidenceClass: f.evidence_class || null,
+    evidenceMethod: f.evidence_method || null,
+    evidenceSource: f.evidence_source || 'nested_diff',
+    patch: f.patch || {},
+    verification: f.verification || null,
+    confidence: typeof f.confidence === 'number' ? f.confidence : 0.7,
+    confidenceBand: f.confidence_band ?? 'medium',
+  }));
+}

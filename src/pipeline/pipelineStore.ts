@@ -108,6 +108,7 @@ export const PHASES_ORDER = [
   'modBots',      // classify each modification (class / method / resource / permission / component / native)
   'bots',         // 18-bot detector roster against the target APK (writes findings)
   'features',     // feature-hunt scan + fingerprint on target APK (writes findings)
+  'nested',       // nested APK analysis — outer vs inner class delta (writes findings)
   'review_gate',  // pause — user marks items to revert (or leave alone) in the review panel
   'revert',       // produce a clean APK with the marked items restored to original bytes
   'export',       // markdown report + modification inventory JSON + clean APK path

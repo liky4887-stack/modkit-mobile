@@ -536,6 +536,42 @@ async function phaseFeatures(ctx: PhaseContext): Promise<string> {
   }
 }
 
+async function phaseNested(ctx: PhaseContext): Promise<string> {
+  // Nested APK forensic — many Android distributions wrap the real
+  // game inside the outer APK as assets/base.apk. Comparing class
+  // inventories tells us what the wrapper added. Findings write into
+  // this same job so they show up alongside bots + features.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('nested', 'start', 'outer vs inner class delta');
+  try {
+    const r = await fetch(BACKEND + '/tool/apk_nested_diff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath, full_class_diff: true }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'nested diff failed: ' + (j.error || 'unknown');
+    if (!j.has_nested) return 'no nested APK entries';
+
+    const { nestedDiffToRows } = await import('./findingAdapters');
+    const rows = nestedDiffToRows(j);
+    const n = await pipelineStore.createFindings(ctx.job.id, rows);
+
+    // Summary: total outer-only / mod-shaped across all nested reports
+    let outerOnly = 0;
+    let modShaped = 0;
+    for (const rep of (j.reports || [])) {
+      const cd = rep.class_diff;
+      if (!cd) continue;
+      outerOnly += cd.outer_only_count || 0;
+      modShaped += ((cd.classified || {}).mod_shaped || []).length;
+    }
+    return n + ' findings · ' + outerOnly + ' outer-only classes · ' +
+      modShaped + ' mod-shaped in ' + (j.wall_ms || 0) + 'ms';
+  } catch (e) {
+    return 'nested error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   // The gate writes a state and returns. If the caller launched the run
   // as a fresh start, the gate pauses the pipeline by setting
@@ -772,6 +808,7 @@ export const pipelineRunner = {
         else if (phase === 'modBots')     summary = await phaseModBots(ctx);
         else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'features')    summary = await phaseFeatures(ctx);
+        else if (phase === 'nested')      summary = await phaseNested(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'revert')      summary = await phaseRevert(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
