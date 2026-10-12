@@ -85,7 +85,7 @@ export default function MonitorTab() {
     setJob(j);
     const [ph, un, fn, pl] = await Promise.all([
       pipelineStore.getPhases(j.id),
-      pipelineStore.listUnits(j.id),
+      Promise.resolve([]),
       pipelineStore.listFindings(j.id),
       pipelineStore.getJobPlan(j.id),
     ]);

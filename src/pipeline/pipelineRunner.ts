@@ -1,44 +1,23 @@
-import { telemetryBridge } from "./pipelineTelemetryBridge";
-import { integrityHeartbeat } from "../orchestration/integrityHeartbeat";
-import { autoMigration } from "../orchestration/autoMigration";
-import { fakeUpdateHandshake } from "../orchestration/fakeUpdateHandshake";
-import { versionContinuityGuard } from "../orchestration/versionContinuityGuard";
-import { dynamicResourceAllocation } from "../orchestration/dynamicResourceAllocation";
-import { antiAnalysisTripwire } from "../orchestration/antiAnalysisTripwire";
-import { contextualChameleon } from "../orchestration/contextualChameleon";
-import { temporalShifter } from "../orchestration/temporalShifter";
-import { heuristicMimicry } from "../orchestration/heuristicMimicry";
-import { entropyBalancer } from "../orchestration/entropyBalancer";
-import { signatureScrubber } from "../orchestration/signatureScrubber";
-import { crossSessionIntelligence } from "../orchestration/crossSessionIntelligence";
-import { binaryDiffViewer } from "../orchestration/binaryDiffViewer";
 // Pipeline runner — the phase orchestrator.
 // Single entry: pipelineRunner.run(jobId, opts). Resumable across calls.
 // 09a implements: import, partition, dispatch.
 // 09b will add: investigate, coordinate, propose, verify, export, audit.
 
-import { pipelineStore, JobRecord, PHASES_ORDER, LLM_PHASES_ORDER, type PhaseId } from './pipelineStore';
-import { investigateRunner } from './investigateRunner';
-import { eventBus } from '@/orchestration/eventBus';
+import { pipelineStore, JobRecord, PHASES_ORDER, type PhaseId } from './pipelineStore';
+import { eventBus } from '@/monitor/eventBus';
 import { getDb } from '@/db/client';
-import type { AgentStep } from '@/agent/agentLoop';
-import { PHASE_QUERIES } from './phaseQueries';
-import { truthLedger } from '@/orchestration/truthLedger';
-import { progressTracker } from '@/orchestration/progressTracker';
-import { collisionGuard } from '@/orchestration/collisionGuard';
-import { dependencyMapper } from '@/orchestration/dependencyMapper';
-
+import { guardFetch } from './resilience/guard';
 // PhaseId is defined in pipelineStore — imported above.
 // Re-exported for modules that historically imported it from here.
 export type { PhaseId };
 
 export interface RunOptions {
   stopAfter?: PhaseId;
+  onStep?: (phase: PhaseId, step: any) => void;
   /** Force re-run of this phase and everything after it. Phases before
    *  it are honored from pipeline_phases as usual. */
   fromPhase?: PhaseId;
   onPhase?: (phase: PhaseId, state: string, summary?: string) => void;
-  onStep?: (phase: PhaseId, step: AgentStep) => void;
 }
 
 export interface PhaseOutcome {
@@ -55,7 +34,7 @@ export interface RunResult {
   finishedAt: number;
   outcomes: PhaseOutcome[];
   stoppedAfter?: PhaseId;
-  finalState: 'done' | 'failed';
+  finalState: 'done' | 'failed' | 'awaiting_user';
 }
 
 // ── helpers ─────────────────────────────────────────────
@@ -70,11 +49,9 @@ async function syncJobToBackend(jobId: string): Promise<void> {
     const job = await pipelineStore.getJob(jobId);
     if (!job) return;
 
-    const [phases, units, investigations] = await Promise.all([
+    const [phases] = await Promise.all([
       pipelineStore.getPhases(jobId).catch(() => []),
-      pipelineStore.listUnits(jobId).catch(() => []),
-      pipelineStore.listInvestigations(jobId, 200).catch(() => []),
-    ]);
+      ]);
 
     let artifacts: any[] = [];
     try {
@@ -112,8 +89,8 @@ async function syncJobToBackend(jobId: string): Promise<void> {
       updated_at: Date.now(),
       finished_at: job.finishedAt,
       phases,
-      units,
-      investigations,
+      units: [],
+      investigations: [],
       artifacts,
       chats,
     };
@@ -273,9 +250,9 @@ function extractJsonArray<T>(text: string): T[] | null {
 // ── phase contexts ──────────────────────────────────────
 
 interface PhaseContext {
+  onStep?: (phase: PhaseId, step: any) => void;
   job: JobRecord;
   emit: (phase: PhaseId, state: string, summary?: string) => void;
-  onStep?: (phase: PhaseId, step: AgentStep) => void;
 }
 
 // ── phase: import ───────────────────────────────────────
@@ -365,90 +342,9 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
     [load.apkSize || 0, ctx.job.id]
   );
 
-  // Build dependency graph from class_cache: within each top package,
-  // link consecutive classes as shared_ref edges. Feeds the collision
-  // guard later. Persists to dependency_map.
-  let edgeCount = 0;
-  try {
-    const { classCache } = await import('@/classdata/classCache');
-    const scanId = ctx.job.scanId || ctx.job.id;
-    const topPkgs = await classCache.packageSummary(scanId, 30);
-    for (const pkg of topPkgs) {
-      const rows = await classCache.byPackagePrefix(scanId, pkg.top, 20);
-      for (let i = 0; i < rows.length - 1; i++) {
-        await dependencyMapper.recordEdge(scanId, {
-          source: 'class:' + rows[i].fqcn,
-          target: 'class:' + rows[i + 1].fqcn,
-          type: 'shared_ref',
-          constraints: ['package:' + pkg.top],
-        });
-        edgeCount++;
-      }
-    }
-  } catch {}
-
   return 'pkg=' + load.package + ' v' + load.versionName +
          ' dex=' + load.dex_count + ' perms=' + load.permission_count +
-         ' edges=' + edgeCount +
          ' load=' + load.load_ms + 'ms';
-}
-
-// ── phase: partition ────────────────────────────────────
-
-async function phaseBots(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8792';
-  const APK = ctx.job.apkPath;
-
-  ctx.emit('bots', 'start', 'running deterministic detectors');
-
-  try {
-    const r = await fetch(BACKEND + '/tools/bots_run_manager', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apk_path: APK }),
-    });
-    const j: any = await r.json();
-    if (!j.ok) {
-      return 'bots run failed: ' + (j.error || 'unknown');
-    }
-    const botFindings = j.findings || [];
-    if (botFindings.length === 0) {
-      return 'bots produced 0 findings';
-    }
-
-    const normalized = botFindings.map((f: any) => ({
-      unitId: null,
-      severity: f.severity || 'info',
-      category: f.category || 'bot-detection',
-      title: f.title || 'Untitled',
-      risk: f.risk || '',
-      evidenceClass: f.evidence_class || null,
-      evidenceMethod: f.evidence_method || null,
-      evidenceSource: f.evidence_source || 'bot:unknown',
-      patch: f.patch || {},
-      verification: f.verification || null,
-      confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
-      confidenceBand: f.confidence_band ?? 'medium',
-    }));
-
-    const n = await pipelineStore.createFindings(ctx.job.id, normalized);
-
-    const byCat: Record<string, number> = {};
-    for (const f of normalized) {
-      const cat = String(f.category).split(':')[0];
-      byCat[cat] = (byCat[cat] || 0) + 1;
-    }
-    const top = Object.entries(byCat)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([k, v]) => v + ' ' + k)
-      .join(', ');
-
-    const tierInfo = Object.keys(j.tiers || {}).length;
-    return n + ' findings from ' + tierInfo + ' tier(s) (' + top + ')';
-  } catch (e) {
-    return 'bots error: ' + (e as Error).message.slice(0, 200);
-  }
 }
 
 async function phaseDecompile(ctx: PhaseContext): Promise<string> {
@@ -462,11 +358,11 @@ async function phaseDecompile(ctx: PhaseContext): Promise<string> {
 
   try {
     const [a, b] = await Promise.all([
-      fetch(BACKEND + '/tools/apk_dex_list', {
+      fetch(BACKEND + '/tool/apk_dex_list', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ apk_path: originalApk }),
       }).then(r => r.json()),
-      fetch(BACKEND + '/tools/apk_dex_list', {
+      fetch(BACKEND + '/tool/apk_dex_list', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ apk_path: modifiedApk }),
       }).then(r => r.json()),
@@ -493,7 +389,7 @@ async function phaseDiff(ctx: PhaseContext): Promise<string> {
   ctx.emit('diff', 'start', 'comparing two APKs');
 
   try {
-    const r = await fetch(BACKEND + '/tools/apk_diff_run', {
+    const r = await fetch(BACKEND + '/tool/apk_diff_run', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ original_apk: originalApk, modified_apk: modifiedApk }),
     });
@@ -501,6 +397,8 @@ async function phaseDiff(ctx: PhaseContext): Promise<string> {
     if (!j.ok) return 'diff failed: ' + (j.error || 'unknown');
 
     const mods = (j.modifications || []) as any[];
+    // wipe any prior rows for this job so ids never collide
+    try { await (await (await import('@/db/client')).getDb()).runAsync('DELETE FROM modifications WHERE job_id = ?', [ctx.job.id]); } catch {}
     if (mods.length === 0) return 'no modifications found';
 
     // Write each modification into the modifications table.
@@ -510,16 +408,17 @@ async function phaseDiff(ctx: PhaseContext): Promise<string> {
     for (const m of mods) {
       try {
         await db.runAsync(
-          `INSERT INTO modifications
-           (id, job_id, type, kind, target, original, modified,
+          `INSERT OR REPLACE INTO modifications
+           (id, job_id, type, kind, target, parent_dex, original, modified,
             original_hash, modified_hash, reverted, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`,
           [
-            String(m.id || ('m_' + Math.random().toString(36).slice(2, 10))),
+            ctx.job.id.slice(0, 8) + '_' + String(m.id || ('m_' + Math.random().toString(36).slice(2, 10))),
             ctx.job.id,
             String(m.type || 'MODIFIED').slice(0, 16),
             String(m.kind || 'unknown').slice(0, 32),
             String(m.target || '').slice(0, 400),
+            m.parent_dex != null ? String(m.parent_dex).slice(0, 200) : null,
             m.original != null ? String(m.original).slice(0, 4000) : null,
             m.modified != null ? String(m.modified).slice(0, 4000) : null,
             m.original_hash ?? null,
@@ -574,7 +473,7 @@ async function phaseModBots(ctx: PhaseContext): Promise<string> {
     let annotated = 0;
     for (const d of dexMods.slice(0, 3)) {
       try {
-        const r = await fetch(BACKEND + '/tools/apk_batch_disassemble', {
+        const r = await fetch(BACKEND + '/tool/apk_batch_disassemble', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ apk_path: ctx.job.apkPath, dex: d.target, classes: [] }),
         }).then(r => r.json());
@@ -642,7 +541,7 @@ async function phaseRevert(ctx: PhaseContext): Promise<string> {
     safeName + '-clean-' + Date.now() + '.apk';
 
   try {
-    const r = await fetch(BACKEND + '/tools/apk_revert_run', {
+    const r = await fetch(BACKEND + '/tool/apk_revert_run', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         original_apk: originalApk,
@@ -670,995 +569,99 @@ async function phaseRevert(ctx: PhaseContext): Promise<string> {
   }
 }
 
-async function phasePartition(ctx: PhaseContext): Promise<string> {
-  ctx.emit('partition', 'start', 'agent proposes work units');
-
-  const query = [
-    'Task: propose work units for parallel analysis of this app.',
-    '',
-    'Step 1 (one call): call manifest(). This gives the app package and',
-    'the full component list. That is your primary evidence.',
-    '',
-    'Step 2 (up to 3 calls): call find_classes_using_strings once with a',
-    'list of common SDK markers to find which vendors are bundled. Example:',
-    '  ["io.sentry", "com.google.firebase", "com.adjust.sdk",',
-    '   "com.facebook", "com.tencent", "io.flutter"]',
-    '',
-    'Step 3: IMMEDIATELY return your final answer. Do not keep probing.',
-    '',
-    'The final answer must contain ONLY a JSON array (no prose around it):',
-    '[{"name":"sandbox-app","kind":"app","seed_strings":["com.sandbox."],"why":"top-level app package"},',
-    ' {"name":"sentry","kind":"sdk","seed_strings":["io.sentry."],"why":"crash analytics"}]',
-    '',
-    'Rules:',
-    '  • Always include one unit with seed_strings=["<app-package>."] where <app-package> comes from manifest.',
-    '  • One unit per SDK you actually found evidence for.',
-    '  • 4–8 units total.',
-    '  • JSON array only. No explanation text. No code fences.',
-  ].join('\n');
-
-  const investigation = await investigateRunner.run({
-    jobId: ctx.job.id,
-    phase: 'partition',
-    query,
-    maxIterations: 8,
-    onStep: (step) => { try { ctx.onStep?.('partition', step); } catch {} },
-  });
-
-  const units = extractJsonArray<any>(investigation.finalAnswer);
-  if (!units || units.length === 0) {
-    await pipelineStore.replaceUnits(ctx.job.id, [{
-      name: 'all-packages',
-      kind: 'app',
-      brief: 'Partition output unparseable — investigating whole app',
-      classes: [],
-      dexFiles: [],
-    }]);
-    return 'no units parsed, single fallback unit written';
-  }
-
-  const normalized = units.map((u, i) => ({
-    name: String(u.name || ('unit-' + i)).slice(0, 48),
-    kind: String(u.kind || 'unknown').slice(0, 24),
-    brief: String(u.why || u.brief || '').slice(0, 400),
-    classes: Array.isArray(u.classes) ? u.classes.map(String).slice(0, 500) : [],
-    dexFiles: Array.isArray(u.dex_files) ? u.dex_files.map(String).slice(0, 200) : [],
-  }));
-
-  await pipelineStore.replaceUnits(ctx.job.id, normalized);
-  return normalized.length + ' units from agent';
-}
-
-// ── phase: dispatch ─────────────────────────────────────
-
-async function phaseDispatch(ctx: PhaseContext): Promise<string> {
-  ctx.emit('dispatch', 'start', 'assign units to worker slots');
-
-  const units = await pipelineStore.listUnits(ctx.job.id);
-  if (units.length === 0) {
-    throw new Error('no units to dispatch — partition produced nothing');
-  }
-
-  const db = await getDb();
-  for (const u of units) {
-    const priority =
-      u.kind === 'sdk' ? 100 :
-      u.kind === 'component' ? 80 :
-      u.kind === 'app' ? 60 :
-      u.kind === 'native' ? 50 : 40;
-
-    await db.runAsync(
-      `UPDATE pipeline_units SET state = 'queued' WHERE id = ?`,
-      [u.id]
-    );
-
-    // Register with progressTracker so completion is weighted by priority
-    try {
-      await progressTracker.upsertSegment({
-        segmentId: u.id,
-        scanId: ctx.job.id,
-        phase: 'investigate' as any,
-        workerId: null as any,
-        tokenBudget: priority,
-      });
-    } catch {}
-    await db.runAsync(
-      `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
-       VALUES (?,?,?,?,?,?,?)`,
-      [
-        Date.now(), ctx.job.id, 'dispatch', 'orchestration_logs', 'info',
-        'unit_queued',
-        JSON.stringify({ unitId: u.id, name: u.name, kind: u.kind, priority }),
-      ]
-    );
-  }
-
-  return units.length + ' units queued (rate limit 3 concurrent)';
-}
-
-// ── investigate (per unit, rate-limited parallelism) ────
-
-// Concurrency is controlled by the global rate limiter. The default is
-// 1 because the cookie bridge to chat.deepseek.com serves one
-// conversation at a time. Raise this via rateLimiter.reconfigure() once
-// we have distinct bearer tokens.
-import { globalRateLimiter } from '@/chat/rateLimiter';
-import { guardFetch, guard } from './resilience/guard';
-
-async function phaseInvestigate(ctx: PhaseContext): Promise<string> {
-  const units = await pipelineStore.listUnits(ctx.job.id);
-  const queued = units.filter(u => u.state === 'queued');
-  if (queued.length === 0) {
-    return '0 queued units (all already done)';
-  }
-
-  ctx.emit('investigate', 'start', queued.length + ' units to process');
-
-  let done = 0;
-  let failed = 0;
-  const investigationIds: string[] = [];
-
-  const runOne = async (unit: typeof queued[number]) => {
-    await pipelineStore.updateUnit(unit.id, {
-      state: 'running',
-      startedAt: Date.now(),
-    });
-
-    try {
-      const query = PHASE_QUERIES.investigate(unit);
-      const investigation = await investigateRunner.run({
-        jobId: ctx.job.id,
-        phase: 'investigate',
-        query,
-        unitId: unit.id,
-        maxIterations: 30,
-        onStep: (step) => { try { ctx.onStep?.('investigate', step); } catch {} },
-      });
-
-      await pipelineStore.updateUnit(unit.id, {
-        state: 'done',
-        finishedAt: Date.now(),
-        sessionId: investigation.dsSessionId,
-      });
-      try { await progressTracker.updateStatus(unit.id, 'completed'); } catch {}
-      investigationIds.push(investigation.investigationId);
-      done++;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[pipeline] unit ${unit.name} FAILED: ${msg.slice(0, 200)}`);
-      await pipelineStore.updateUnit(unit.id, {
-        state: 'failed',
-        finishedAt: Date.now(),
-        error: msg,
-      });
-      try { await progressTracker.updateStatus(unit.id, 'failed'); } catch {}
-      failed++;
-    }
-  };
-
-  // Process in batches sized by the rate limiter's maxConcurrent.
-  const concurrency = Math.max(1, globalRateLimiter.stats().maxConcurrent);
-  for (let i = 0; i < queued.length; i += concurrency) {
-    const batch = queued.slice(i, i + concurrency);
-    ctx.emit('investigate', 'running',
-      'batch ' + (Math.floor(i / concurrency) + 1) +
-      ' (' + batch.length + ' units, limit ' + concurrency + ')');
-    await Promise.all(batch.map(runOne));
-  }
-
-  return done + ' units done, ' + failed + ' failed';
-}
-
-// ── coordinate ──────────────────────────────────────────
-
-interface Remediation {
-  id: string;
-  title: string;
-  target_class: string;
-  rationale: string;
-  expected_effect: string;
-}
-
-async function phaseFindings(ctx: PhaseContext): Promise<string> {
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
-  if (investigations.length === 0) {
-    return '0 investigations to synthesize findings from';
-  }
-
-  ctx.emit('findings', 'start', investigations.length + ' investigations to analyze');
-
-  // Build a compact evidence bundle. Full answers can be 10-30KB each,
-  // so we cap per-report to keep the total prompt under DeepSeek's
-  // practical limits.
-  const PER_REPORT_CAP = 6000;
-  const blocks: string[] = [];
-  for (const inv of investigations) {
-    let answer = '';
-    try {
-      answer = (await pipelineStore.getFullAnswer(inv.id)) || inv.answer_preview || '';
-    } catch {
-      answer = inv.answer_preview || '';
-    }
-    const trimmed = answer.length > PER_REPORT_CAP
-      ? answer.slice(0, PER_REPORT_CAP) + '\n\n[... truncated ...]'
-      : answer;
-    const label = (inv.phase || '?') + '/' + (inv.unit_id ? String(inv.unit_id).slice(0, 8) : 'job');
-    blocks.push('=== ' + label + ' ===\n' + trimmed);
-  }
-
-  const query = PHASE_QUERIES.findings(blocks.join('\n\n'));
-  const investigation = await investigateRunner.run({
-    jobId: ctx.job.id,
-    phase: 'findings',
-    query,
-    maxIterations: 3,   // synthesis only, no tool use
-    onStep: (step) => { try { ctx.onStep?.('findings', step); } catch {} },
-  });
-
-  const raw = extractJsonArray<any>(investigation.finalAnswer);
-  if (!raw || raw.length === 0) {
-    await pipelineStore.logRawAnswer(ctx.job.id, 'findings', investigation.finalAnswer);
-    return 'no findings parsed — raw answer logged';
-  }
-
-  // Normalize shape + clamp every field so a malformed row can't wedge
-  // the UI or the D export phase.
-  const SEV = new Set(['critical', 'high', 'medium', 'low', 'info']);
-  const normalized = raw.map((f, i) => ({
-    severity: SEV.has(String(f.severity || '').toLowerCase())
-      ? String(f.severity).toLowerCase() as any
-      : 'info',
-    category: String(f.category || 'uncategorized').slice(0, 64).toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-    title: String(f.title || ('Finding ' + (i + 1))).slice(0, 200),
-    risk: String(f.risk || '').slice(0, 2000),
-    evidenceClass: f.evidence_class ? String(f.evidence_class).slice(0, 200) : null,
-    evidenceMethod: f.evidence_method ? String(f.evidence_method).slice(0, 200) : null,
-    evidenceSource: f.evidence_source ? String(f.evidence_source).slice(0, 200) : null,
-    patch: f.proposed_patch ?? {},
-    verification: f.verification ? String(f.verification).slice(0, 500) : null,
-  }));
-
-  const n = await pipelineStore.createFindings(ctx.job.id, normalized);
-  const bySev = normalized.reduce<Record<string, number>>((acc, f) => {
-    acc[f.severity] = (acc[f.severity] || 0) + 1;
-    return acc;
-  }, {});
-  const sevSummary = Object.entries(bySev).map(([k, v]) => v + ' ' + k).join(', ');
-  return n + ' findings stored (' + sevSummary + ')';
-}
-
-async function phaseApply(ctx: PhaseContext): Promise<string> {
-  const approved = await pipelineStore.listApprovedFindings(ctx.job.id);
-  if (approved.length === 0) {
-    return '0 approved findings — nothing to apply';
-  }
-
-  ctx.emit('apply', 'start', approved.length + ' approved findings');
-
-  // Backend proxy base — same 8790 the rest of the app talks to.
-  const BACKEND = 'http://127.0.0.1:8792';
-
-  // 1. Resolve dex for each finding's evidence_class
-  const findingsWithDex: any[] = [];
-  for (const f of approved) {
-    const targetClass = f.evidenceClass || (f.patch && f.patch.target_class);
-    if (!targetClass) {
-      await pipelineStore.setFindingState(f.id, 'failed', 'no target class');
-      continue;
-    }
-    try {
-      const r = await fetch(BACKEND + '/tools/apk_find_class_dex', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fqcn: targetClass }),
-      });
-      const j: any = await r.json();
-      const dex = j?.candidate_dexes?.[0];
-      if (!dex) {
-        await pipelineStore.setFindingState(f.id, 'failed', 'no dex contains class');
-        continue;
-      }
-      findingsWithDex.push({
-        id: f.id,
-        dex,
-        patch: {
-          type: f.patch?.type || 'informational',
-          target_class: targetClass,
-          target_field: f.patch?.target,
-          target_method: f.patch?.method || f.evidenceMethod,
-          new_value: f.patch?.change === 'false' ? false : (f.patch?.change === 'true' ? true : undefined),
-        },
-      });
-    } catch (e) {
-      await pipelineStore.setFindingState(f.id, 'failed', (e as Error).message.slice(0, 200));
-    }
-  }
-
-  if (findingsWithDex.length === 0) {
-    return 'no findings could be resolved to a dex';
-  }
-
-  // 2. Call sidecar /apk/apply_all
-  const APK = ctx.job.apkPath;
-  const OUTPUT = '/storage/emulated/0/Download/modkit-enhanced/' + ctx.job.id.slice(0, 12) + '-enhanced.apk';
-
-  // Filter to patchable types only
-  const patchable = findingsWithDex.filter(f =>
-    ['set_field_boolean', 'noop_method', 'remove_class'].includes(f.patch.type));
-
-  if (patchable.length === 0) {
-    return findingsWithDex.length + ' resolved, 0 patchable (all informational)';
-  }
-
-  try {
-    const r = await fetch(BACKEND + '/tools/apk_orchestrated_apply', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        apk_path: APK,
-        output_path: OUTPUT,
-        findings: patchable,
-      }),
-      // Long-running: batch extract + patch + recombine + sign + follow-back
-    });
-    const j: any = await r.json();
-    if (!j.ok) {
-      throw new Error('apply failed: ' + (j.error || 'unknown'));
-    }
-    // Persist the full orchestration report — every batch, every verdict,
-    // every follow-back check is now auditable from the job record.
-    await pipelineStore.setJobJson(ctx.job.id, 'plan', {
-      orchestration_verdict: j.verdict,
-      enhanced_apk: j.recombination?.final_apk,
-      final_size: j.recombination?.final_size,
-      integrity: j.recombination?.integrity,
-      signature: j.recombination?.signature,
-      validation: j.validation,
-      batches: j.batches,
-      follow_back: j.follow_back,
-      cross_batch: j.cross_batch,
-      report_path: j.report_path,
-      total_ms: j.total_ms,
-    });
-
-    // Fail closed: a successful HTTP response is not proof of a valid APK.
-    // Persist the report above, but do not mark findings applied or continue
-    // to export unless every required final-artifact check explicitly passes.
-    const validation = j.validation;
-    if (
-      j.verdict !== 'all_applied' ||
-      !validation ||
-      validation.signature_ok !== true ||
-      validation.final_integrity_ok !== true ||
-      validation.follow_back_ok !== true
-    ) {
-      throw new Error(
-        'orchestration validation failed: verdict=' +
-        String(j.verdict || 'missing') +
-        ', validation=' +
-        JSON.stringify(validation ?? null).slice(0, 160)
-      );
-    }
-
-    // Mark per-finding state from the orchestrator's per-patch verdicts.
-    const verdictByFinding: Record<string, string> = {};
-    for (const b of (j.batches || [])) {
-      for (const v of (b.verdicts || [])) {
-        verdictByFinding[v.id] = v.verdict;
-      }
-    }
-    let appliedCount = 0;
-    let silentCount = 0;
-    let failedCount = 0;
-    for (const f of patchable) {
-      const verdict = verdictByFinding[f.id];
-      if (verdict === 'applied' || verdict === 'already_satisfied') {
-        await pipelineStore.setFindingState(f.id, 'applied');
-        appliedCount++;
-      } else if (verdict === 'silent_failure') {
-        await pipelineStore.setFindingState(f.id, 'failed', 'silent failure: marker missing after patch');
-        silentCount++;
-      } else {
-        await pipelineStore.setFindingState(f.id, 'failed', verdict || 'unknown verdict');
-        failedCount++;
-      }
-    }
-
-    // Surface systemic issues as a warning the operator can act on.
-    const systemic = (j.cross_batch?.systemic_issues || []).length;
-
-    return (
-      appliedCount + ' applied, ' + failedCount + ' failed' +
-      (silentCount ? ', ' + silentCount + ' SILENT FAILURES' : '') +
-      (systemic ? ', ' + systemic + ' systemic pattern(s)' : '') +
-      ' — verdict: ' + j.verdict +
-      ' → ' + (j.recombination?.final_apk || 'no output')
-    );
-  } catch (e) {
-    throw new Error('apply error: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200));
-  }
-}
-
-async function phaseCoordinate(ctx: PhaseContext): Promise<string> {
-  const units = await pipelineStore.listUnits(ctx.job.id);
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
-
-  if (investigations.length === 0) {
-    throw new Error('no investigations to coordinate');
-  }
-
-  ctx.emit('coordinate', 'start', 'merging ' + investigations.length + ' investigations');
-
-  const fullAnswers: string[] = [];
-  for (const inv of investigations) {
-    const answer = await pipelineStore.getFullAnswer(inv.id);
-    fullAnswers.push(answer || inv.answer_preview || '');
-  }
-
-  const query = PHASE_QUERIES.coordinate(units, fullAnswers);
-  const investigation = await investigateRunner.run({
-    jobId: ctx.job.id,
-    phase: 'coordinate',
-    query,
-    maxIterations: 3,   // pure synthesis, minimal tool use
-    onStep: (step) => { try { ctx.onStep?.('coordinate', step); } catch {} },
-  });
-
-  // Extract remediation JSON from the final answer
-  const remediations = extractJsonArray<Remediation>(investigation.finalAnswer);
-  if (remediations && remediations.length > 0) {
-    await pipelineStore.setJobJson(ctx.job.id, 'plan', remediations);
-    return remediations.length + ' remediations in plan';
-  }
-
-  // Fallback: synth one remediation per unit so propose/verify/export can run.
-  // The coordinate answer is still saved to the investigation table.
-  // Fallback plan: pull real class names from class_cache so verify
-  // has something to check. Never use unit.name — that's a kebab-id.
-  const { classCache } = await import('@/classdata/classCache');
-  const scanId = ctx.job.scanId || ctx.job.id;
-  const fallbackUnits = await pipelineStore.listUnits(ctx.job.id);
-
-  const synthetic: Remediation[] = [];
-  for (let i = 0; i < fallbackUnits.length && synthetic.length < 6; i++) {
-    const u = fallbackUnits[i];
-    let seedClasses: string[] = [];
-    try {
-      const parsed = JSON.parse(u.classesJson || '[]');
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        seedClasses = parsed.slice(0, 3).map(String);
-      }
-    } catch {}
-
-    // If the unit didn't list classes, sample from class_cache by prefix
-    if (seedClasses.length === 0) {
-      try {
-        const prefix = u.name.split('-')[0];
-        const rows = await classCache.byPackagePrefix(scanId, prefix, 3);
-        seedClasses = rows.map((r: any) => r.fqcn).slice(0, 3);
-      } catch {}
-    }
-
-    for (const fqcn of seedClasses) {
-      if (!fqcn.includes('.')) continue;
-      synthetic.push({
-        id: 'r' + (synthetic.length + 1),
-        title: 'Review ' + fqcn.split('.').pop() + ' for privacy and data minimization',
-        target_class: fqcn,
-        rationale: 'Investigation flagged ' + u.name + '; this class needs review.',
-        expected_effect: 'Documented data flows and reduced surface.',
-      });
-      if (synthetic.length >= 6) break;
-    }
-  }
-
-  if (synthetic.length === 0) {
-    await pipelineStore.logRawAnswer(ctx.job.id, 'coordinate', investigation.finalAnswer);
-    return 'plan not parseable and no units — logged raw answer';
-  }
-
-  await pipelineStore.setJobJson(ctx.job.id, 'plan', synthetic);
-  await pipelineStore.logRawAnswer(ctx.job.id, 'coordinate', investigation.finalAnswer);
-  return synthetic.length + ' synthetic remediations (raw answer unparseable)';
-}
-
-// ── propose (per remediation) ───────────────────────────
-
-async function phasePropose(ctx: PhaseContext): Promise<string> {
-  // Re-fetch — coordinate may have written plan_json earlier in this run
-  const job = await pipelineStore.getJob(ctx.job.id);
-  if (!job) throw new Error('job disappeared: ' + ctx.job.id);
-  const plan = job.planJson ? JSON.parse(job.planJson) as Remediation[] : [];
-  if (!Array.isArray(plan) || plan.length === 0) {
-    throw new Error('no plan — coordinate produced nothing');
-  }
-
-  ctx.emit('propose', 'start', plan.length + ' proposals to draft');
-
-  const investigations = await pipelineStore.listInvestigations(job.id, 200);
-  const findingsContext = investigations
-    .map(i => i.answer_preview || '')
-    .join('\n\n')
-    .slice(0, 8000);
-
-  let done = 0;
-  for (const r of plan) {
-    try {
-      const query = PHASE_QUERIES.propose(r, findingsContext);
-      const investigation = await investigateRunner.run({
-        jobId: job.id,
-        phase: 'propose',
-        query,
-        maxIterations: 8,
-        onStep: (step) => { try { ctx.onStep?.('propose', step); } catch {} },
-      });
-
-      // Truth ledger: record every proposal with its rationale.
-      try {
-        await truthLedger.record({
-          correlationId: job.id,
-          scanId: job.id,
-          phase: 'propose',
-          sourceSegment: r.id || r.target_class || 'proposal',
-          targetOffsets: [],
-          rationale: r.title || r.rationale || 'propose phase',
-          beforeHash: '',
-          afterHash: '',
-          validationOutcome: 'pending',
-        });
-      } catch {}
-
-      // Collision guard: proposals in the same job that touch the same
-      // target class are conflicts and need arbitration.
-      try {
-        const active = await truthLedger.getByScan(job.id);
-        const seenTargets = new Set<string>();
-        for (const entry of active) {
-          if (entry.source_segment === r.target_class) continue;
-          if (entry.source_segment?.includes(r.target_class || '')) {
-            seenTargets.add(entry.source_segment);
-          }
-        }
-        if (seenTargets.size > 0 && r.target_class) {
-          await collisionGuard.check({
-            scanId: job.id,
-            correlationId: job.id,
-            segmentId: r.target_class,
-            workerId: 'propose-phase',
-            phase: 'propose',
-            offsets: [],
-            safetyScore: 0.5,
-          });
-        }
-      } catch {}
-
-      done++;
-    } catch (e) {
-      // keep going — one failed proposal shouldn't kill the phase
-      ctx.emit('propose', 'running', 'proposal ' + r.id + ' failed: ' + String(e).slice(0, 100));
-    }
-  }
-
-  return done + '/' + plan.length + ' proposals drafted';
-}
-
-// ── verify ──────────────────────────────────────────────
-
-async function phaseVerify(ctx: PhaseContext): Promise<string> {
-  // Structural verification: every proposal's target class must actually
-  // exist in the loaded APK. We extract target names via multiple regex
-  // patterns so we don't depend on exactly how DeepSeek formatted them.
-
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 200);
-  const proposes = investigations.filter(i => i.phase === 'propose');
-  if (proposes.length === 0) {
-    return 'no proposals to verify';
-  }
-
-  // Fall back list: the coordinate plan holds target_class for every
-  // remediation, in case the propose answer is unparseable.
-  const job = await pipelineStore.getJob(ctx.job.id);
-  const plan: Remediation[] = job?.planJson ? JSON.parse(job.planJson) : [];
-
-  ctx.emit('verify', 'start', 'checking ' + proposes.length + ' proposals');
-
-  const verified: string[] = [];
-  const failed: { id: string; reason: string }[] = [];
-
-  const tryExtractTarget = (answer: string): string | null => {
-    // Strategy 1: explicit markers (Target:, ### Target, target_class, etc.)
-    const explicitPatterns = [
-      /\*\*Target:\*\*\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /\*\*Target class:\*\*\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /Target class[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /Target[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /^###\s*Target\s*\n\s*[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/im,
-      /target_class["\':\s]+([A-Za-z][A-Za-z0-9_.$]+)/i,
-      /class\s+`([A-Za-z][A-Za-z0-9_.$]+)`/i,
-      /Affected class[:\s]+[`\s]*([A-Za-z][A-Za-z0-9_.$]+)/i,
-    ];
-    for (const re of explicitPatterns) {
-      const m = answer.match(re);
-      if (m && m[1] && m[1].length > 4) return m[1];
-    }
-
-    // Strategy 2: find every dotted identifier that looks like a Java
-    // class (contains at least one dot, no spaces, length > 6, ends with
-    // an uppercase-starting segment). Return the first one that has a
-    // lowercase package prefix.
-    const tokens = answer.match(/\b[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*\.[A-Z][A-Za-z0-9_$]*\b/g) || [];
-    const seen = new Set<string>();
-    for (const t of tokens) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      // Skip obvious non-targets
-      if (t.startsWith('android.') || t.startsWith('java.') ||
-          t.startsWith('kotlin.') || t.startsWith('javax.') ||
-          t.startsWith('org.intellij.') || t.startsWith('org.jetbrains.')) {
-        continue;
-      }
-      if (t.length < 8) continue;
-      return t;
-    }
-
-    return null;
-  };
-
-  const checkClassExists = async (fqcn: string): Promise<boolean> => {
-    const simple = fqcn.split('.').pop() || fqcn;
-    const search = fqcn.replace(/\./g, '/').replace(/^L?/, 'L').replace(/;?$/, ';');
-    // Try both the full descriptor and the simple name
-    for (const q of [search, simple]) {
-      try {
-        const r = await guardFetch('http://127.0.0.1:8792/tool/find_classes_by_name', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name: q, limit: 5 }),
-        }).then(x => x.json());
-        if (r.ok && r.matches > 0) return true;
-      } catch {}
-    }
-    return false;
-  };
-
-  for (let idx = 0; idx < proposes.length; idx++) {
-    const p = proposes[idx];
-    const answer = await pipelineStore.getFullAnswer(p.id);
-
-    // Log raw propose answer to event_log so extraction failures are
-    // diagnosable without a shell into the app's SQLite sandbox.
-    try {
-      const db = await (await import('@/db/client')).getDb();
-      await db.runAsync(
-        `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
-         VALUES (?,?,?,?,?,?,?)`,
-        [
-          Date.now(), ctx.job.id, 'verify', 'orchestration_logs', 'info',
-          'verify_propose_raw',
-          JSON.stringify({
-            investigation_id: p.id,
-            length: answer.length,
-            first600: answer.slice(0, 600),
-            hasTargetMarker: /target/i.test(answer),
-            hasClassWord: /class/i.test(answer),
-          }),
-        ]
-      );
-    } catch {}
-
-    let target = tryExtractTarget(answer);
-    if (!target && plan[idx] && plan[idx].target_class) {
-      target = plan[idx].target_class;
-    }
-
-    if (!target) {
-      failed.push({ id: p.id, reason: 'no target class extractable' });
-      continue;
-    }
-
-    const exists = await checkClassExists(target);
-    if (exists) {
-      verified.push(target);
-    } else {
-      failed.push({ id: p.id, reason: 'class not found: ' + target });
-    }
-  }
-
-  // Persist per-verification rows to finding_verifications.
-  // One row per proposal: target, checks performed, pass/fail.
-  try {
-    const db = await (await import('@/db/client')).getDb();
-    for (let idx = 0; idx < proposes.length; idx++) {
-      const p = proposes[idx];
-      const answer = await pipelineStore.getFullAnswer(p.id);
-      const target = tryExtractTarget(answer) || (plan[idx] && plan[idx].target_class) || null;
-
-      // Check 1: target class exists in the loaded APK
-      const classExists = target ? await checkClassExists(target) : false;
-
-      // Check 2: payload well-formed? (crude syntax check)
-      const hasCode = /\{[\s\S]*\}/.test(answer) || /```/.test(answer);
-      const hasChangeDesc = /change|patch|modif|instrument|config/i.test(answer);
-
-      // Check 3: rationale present
-      const hasRationale = /rationale|why|reason/i.test(answer);
-
-      // Check 4: verification steps present
-      const hasVerifySteps = /verif|confirm|check how/i.test(answer);
-
-      const checks = [
-        { name: 'class_exists', passed: classExists, detail: target || 'no target' },
-        { name: 'has_code_or_fence', passed: hasCode, detail: '' },
-        { name: 'has_change_desc', passed: hasChangeDesc, detail: '' },
-        { name: 'has_rationale', passed: hasRationale, detail: '' },
-        { name: 'has_verify_steps', passed: hasVerifySteps, detail: '' },
-      ];
-
-      const passed = checks.filter(c => c.passed).length;
-      const allPassed = checks.every(c => c.passed);
-      const failures = checks.filter(c => !c.passed).map(c => c.name).join(',');
-
-      await db.runAsync(
-        `INSERT INTO finding_verifications
-           (id, job_id, investigation_id, remediation_id, phase, target_class,
-            checks_json, passed, failure_reasons, self_critique, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          'fv_' + Math.random().toString(36).slice(2, 12),
-          ctx.job.id,
-          p.id,
-          (plan[idx] && plan[idx].id) || null,
-          'verify',
-          target,
-          JSON.stringify(checks),
-          allPassed ? 1 : 0,
-          failures || null,
-          null,
-          Date.now(),
-        ]
-      );
-    }
-  } catch (e) {
-    eventBus.emit({
-      scanId: ctx.job.id, correlationId: ctx.job.id, phase: 'verify' as any,
-      functionId: 'orchestration_logs', severity: 'warn',
-      payload: { action: 'verify_persist_failed', error: String(e) },
-    });
-  }
-
-  // Persist a summary log
-  try {
-    const db = await (await import('@/db/client')).getDb();
-    await db.runAsync(
-      `INSERT INTO event_log (ts, job_id, phase, function_id, severity, action, payload_json)
-       VALUES (?,?,?,?,?,?,?)`,
-      [
-        Date.now(), ctx.job.id, 'verify', 'orchestration_logs', 'info',
-        'verify_complete',
-        JSON.stringify({
-          verified: verified.length,
-          failed: failed.length,
-          failure_reasons: failed.slice(0, 5),
-          verified_targets: verified.slice(0, 10),
-          deep_checks: proposes.length,
-        }),
-      ]
-    );
-  } catch {}
-
-  // If nothing verified, don't fail the phase — record it and move on.
-  // Export and audit will report the empty result downstream.
-  return verified.length + ' verified, ' + failed.length + ' failed';
-}
-
-// ── export ──────────────────────────────────────────────
-
 async function phaseExport(ctx: PhaseContext): Promise<string> {
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 500);
+  ctx.emit('export', 'start', 'writing report');
 
-  const candidates = investigations.filter(i =>
-    i.phase === 'propose' || i.phase === 'coordinate' || i.phase === 'investigate'
-  );
+  const phases = await pipelineStore.getPhases(ctx.job.id);
+  const findings = await pipelineStore.listFindings(ctx.job.id).catch(() => []);
+  const mods = await pipelineStore.listModifications(ctx.job.id);
+  const revertedMods = mods.filter(m => m.reverted);
+  const plan = await pipelineStore.getJobPlan(ctx.job.id);
 
-  if (candidates.length === 0) {
-    throw new Error('no investigations to export');
+  const outDir = '/storage/emulated/0/Download/modkit-reports';
+  const safeName = (ctx.job.apkName || ctx.job.id).replace(/[^A-Za-z0-9._-]/g, '_');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const path = outDir + '/' + safeName + '-report-' + stamp + '.md';
+
+  const lines: string[] = [];
+  lines.push('# modkit report');
+  lines.push('');
+  lines.push('- target: `' + (ctx.job.apkPath || '') + '`');
+  lines.push('- reference: `' + ((ctx.job as any).modifiedApkPath || '(none)') + '`');
+  lines.push('- job id: `' + ctx.job.id + '`');
+  lines.push('- generated: ' + new Date().toISOString());
+  lines.push('');
+  lines.push('## phases');
+  lines.push('');
+  for (const ph of phases) {
+    lines.push('- **' + ph.phase + '** [' + ph.state + '] ' + (ph.summary || ''));
   }
-
-  ctx.emit('export', 'start', candidates.length + ' artifacts to produce');
-
-  const outDir = '/storage/emulated/0/Download/modkit-artifacts/' + ctx.job.id;
-
-  // /file/write doesn't mkdir -p. Ensure the dir exists first.
-  try {
-    await guardFetch('http://127.0.0.1:8792/executeCommand', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        command: 'mkdir',
-        args: ['-p', outDir],
-        timeoutMs: 5000,
-      }),
-    });
-  } catch {}
-
-  let done = 0;
-  let bytes = 0;
-  const failures: string[] = [];
-
-  for (const c of candidates) {
-    try {
-      const answer = await pipelineStore.getFullAnswer(c.id);
-      if (!answer || answer.length < 40) {
-        failures.push(c.id);
-        continue;
-      }
-
-      const title = (c.query || '').split('\n')[0].slice(0, 80) || (c.phase + ' ' + c.id.slice(0, 6));
-      const filename = c.phase + '-' + c.id.slice(0, 6) + '-' + slugify(title) + '.md';
-      const filePath = outDir + '/' + filename;
-
-      const body = [
-        '# ' + title,
-        '',
-        '**Job:** ' + ctx.job.id,
-        '**Phase:** ' + c.phase,
-        '**Investigation:** ' + c.id,
-        '**Tool calls:** ' + (c.tool_call_count ?? 0),
-        '**Duration:** ' + (c.total_ms ?? 0) + ' ms',
-        '',
-        '---',
-        '',
-        answer,
-      ].join('\n');
-
-      const sha = await sha256Hex(body);
-
-      const res = await guardFetch('http://127.0.0.1:8792/file/write', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: filePath, content: body }),
-      }).then(r => r.json());
-
-      if (!res.ok) {
-        failures.push(c.id + ':' + (res.error || 'write_failed'));
-        continue;
-      }
-
-      const { getDb } = await import('@/db/client');
-      const db = await getDb();
-      const artifactId = 'art_' + Math.random().toString(36).slice(2, 12);
-      await db.runAsync(
-        `INSERT INTO finding_artifacts
-           (id, job_id, investigation_id, phase, title, kind, file_path, size_bytes, sha256, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [
-          artifactId, ctx.job.id, c.id, c.phase, title, 'markdown',
-          filePath, body.length, sha, Date.now(),
-        ]
-      );
-
-      done++;
-      bytes += body.length;
-
-      ctx.emit('export', 'running', filename + ' (' + body.length + 'B)');
-    } catch (e) {
-      failures.push(c.id + ':' + String(e).slice(0, 60));
+  lines.push('');
+  lines.push('## modifications (' + mods.length + ')');
+  lines.push('');
+  if (mods.length === 0) {
+    lines.push('_no modifications found_');
+  } else {
+    for (const m of mods.slice(0, 500)) {
+      const mark = m.reverted ? '[x]' : '[ ]';
+      lines.push('- ' + mark + ' `' + m.type + '` ' + m.kind + ' — `' + m.target + '`');
     }
+    if (mods.length > 500) lines.push('- ... ' + (mods.length - 500) + ' more');
+  }
+  lines.push('');
+  lines.push('## reverted (' + revertedMods.length + ')');
+  lines.push('');
+  for (const m of revertedMods) {
+    lines.push('- `' + m.type + '` ' + m.kind + ' — `' + m.target + '`');
+  }
+  lines.push('');
+  lines.push('## findings (' + findings.length + ')');
+  lines.push('');
+  for (const f of findings.slice(0, 200)) {
+    lines.push('- [' + f.severity + '] ' + f.title);
+  }
+  lines.push('');
+  if (plan) {
+    lines.push('## plan');
+    lines.push('');
+    lines.push('```json');
+    lines.push(JSON.stringify(plan, null, 2).slice(0, 4000));
+    lines.push('```');
   }
 
-  const sbomPath = await writeSbom(ctx);
+  const body = lines.join('\n');
+  const r = await fetch('http://127.0.0.1:8792/file/write', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: body }),
+  }).then(x => x.json());
+  if (!r.ok) throw new Error('report write failed: ' + (r.error || 'unknown'));
 
-  const failNote = failures.length > 0
-    ? ' · ' + failures.length + ' failed'
-    : '';
-  const sbomNote = sbomPath ? ' · SBOM written' : '';
-  return done + ' artifacts (' + bytes + ' bytes) → ' + outDir + failNote + sbomNote;
+  const bytes = body.length;
+  return 'report → ' + path + ' (' + bytes + ' bytes, ' +
+         mods.length + ' mods / ' + revertedMods.length + ' reverted / ' +
+         findings.length + ' findings)';
 }
 
 // ── audit ───────────────────────────────────────────────
 
-async function writeSbom(ctx: PhaseContext): Promise<string | null> {
-  try {
-    const { classCache } = await import('@/classdata/classCache');
-    const scanId = ctx.job.scanId || ctx.job.id;
-
-    const summary = await classCache.packageSummary(scanId, 60);
-    if (!summary || summary.length === 0) return null;
-
-    // Map top-level package prefixes to known SDK coordinates
-    const KNOWN: Array<{ match: RegExp; name: string; group: string }> = [
-      { match: /^io\.sentry\./,          name: 'Sentry',      group: 'io.sentry' },
-      { match: /^com\.google\.firebase\./, name: 'Firebase',  group: 'com.google.firebase' },
-      { match: /^com\.adjust\.sdk\./,    name: 'Adjust',      group: 'com.adjust.sdk' },
-      { match: /^com\.facebook\./,        name: 'Facebook',    group: 'com.facebook.android' },
-      { match: /^com\.tencent\./,         name: 'Tencent',     group: 'com.tencent' },
-      { match: /^io\.flutter\./,          name: 'Flutter',     group: 'io.flutter' },
-      { match: /^com\.google\.android\.gms\./, name: 'Google Play Services', group: 'com.google.android.gms' },
-      { match: /^okhttp3\./,               name: 'OkHttp',      group: 'com.squareup.okhttp3' },
-      { match: /^com\.squareup\./,        name: 'Square',      group: 'com.squareup' },
-      { match: /^com\.android\.billingclient\./, name: 'Play Billing', group: 'com.android.billingclient' },
-    ];
-
-    const components: any[] = [];
-    const seen = new Set<string>();
-    for (const entry of summary) {
-      for (const k of KNOWN) {
-        if (k.match.test(entry.top + '.') && !seen.has(k.group)) {
-          seen.add(k.group);
-          components.push({
-            type: 'library',
-            name: k.name,
-            group: k.group,
-            'bom-ref': 'pkg:maven/' + k.group,
-            properties: [
-              { name: 'modkit:classCount', value: String(entry.count) },
-              { name: 'modkit:packagePrefix', value: entry.top },
-            ],
-          });
-          break;
-        }
-      }
-    }
-
-    const sbom = {
-      bomFormat: 'CycloneDX',
-      specVersion: '1.5',
-      version: 1,
-      metadata: {
-        timestamp: new Date().toISOString(),
-        tools: [{ vendor: 'modkit', name: 'modkit-pipeline', version: '1.0.0' }],
-        component: {
-          type: 'application',
-          name: ctx.job.apkName || 'target.apk',
-          'bom-ref': 'apk:' + (ctx.job.apkName || 'target'),
-        },
-      },
-      components,
-    };
-
-    const outDir = '/storage/emulated/0/Download/modkit-reports/' + ctx.job.id;
-    try {
-      await guardFetch('http://127.0.0.1:8792/executeCommand', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ command: 'mkdir', args: ['-p', outDir], timeoutMs: 5000 }),
-      });
-    } catch {}
-
-    const filePath = outDir + '/sbom.cyclonedx.json';
-    const content = JSON.stringify(sbom, null, 2);
-    const res = await guardFetch('http://127.0.0.1:8792/file/write', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: filePath, content }),
-    }).then(r => r.json());
-
-    if (!res.ok) return null;
-    ctx.emit('export', 'running', 'SBOM: ' + components.length + ' components → ' + filePath);
-    return filePath;
-  } catch {
-    return null;
-  }
+async function writeSbom(_ctx: PhaseContext): Promise<string | null> {
+  // SBOM generation depended on classdata/classCache which is no longer
+  // part of the deterministic chain. Export phase proceeds without it.
+  return null;
 }
 
 async function phaseAudit(ctx: PhaseContext): Promise<string> {
-  const units = await pipelineStore.listUnits(ctx.job.id);
-  const investigations = await pipelineStore.listInvestigations(ctx.job.id, 500);
   const phases = await pipelineStore.getPhases(ctx.job.id);
-
-  const doneUnits = units.filter(u => u.state === 'done').length;
-  const failedUnits = units.filter(u => u.state === 'failed').length;
+  const mods = await pipelineStore.listModifications(ctx.job.id);
+  const revertedMods = mods.filter(m => m.reverted);
   const donePhases = phases.filter(p => p.state === 'done').length;
   const failedPhases = phases.filter(p => p.state === 'failed').length;
-
   const summary = [
-    'units: ' + doneUnits + ' done / ' + failedUnits + ' failed / ' + units.length + ' total',
     'phases: ' + donePhases + ' done / ' + failedPhases + ' failed / ' + phases.length + ' total',
-    'investigations: ' + investigations.length,
+    'mods: ' + mods.length + ' total / ' + revertedMods.length + ' reverted',
   ].join(' · ');
-
   ctx.emit('audit', 'start', summary);
-
   return summary;
 }
 
@@ -1726,20 +729,28 @@ export const pipelineRunner = {
         else if (phase === 'modBots')     summary = await phaseModBots(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'revert')      summary = await phaseRevert(ctx);
-        else if (phase === 'bots')        summary = await phaseBots(ctx);
-        else if (phase === 'partition')   summary = await phasePartition(ctx);
-        else if (phase === 'dispatch')    summary = await phaseDispatch(ctx);
-        else if (phase === 'investigate') summary = await phaseInvestigate(ctx);
-        else if (phase === 'coordinate')  summary = await phaseCoordinate(ctx);
-        else if (phase === 'findings')    summary = await phaseFindings(ctx);
-        else if (phase === 'propose')     summary = await phasePropose(ctx);
-        else if (phase === 'verify')      summary = await phaseVerify(ctx);
-        else if (phase === 'apply')       summary = await phaseApply(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);
         else                              summary = 'unknown phase: ' + phase;
 
         const elapsedMs = Date.now() - t0;
+
+        if (summary === '__REVIEW_GATE_PAUSE__') {
+          await pipelineStore.finishPhase(jobId, phase, summary);
+          outcomes.push({ phase, state: 'paused' as any, summary, elapsedMs });
+          console.log(`[pipeline] ${phase} paused in ${(elapsedMs/1000).toFixed(1)}s — awaiting user`);
+          emit(phase, 'paused', 'awaiting user decisions in MODS tab');
+          await pipelineStore.setJobState(jobId, 'awaiting_user' as any);
+          await releaseWakeLock();
+          return {
+            jobId,
+            startedAt,
+            finishedAt: Date.now(),
+            outcomes,
+            stoppedAfter: phase,
+            finalState: 'awaiting_user' as any,
+          };
+        }
         await pipelineStore.finishPhase(jobId, phase, summary);
         outcomes.push({ phase, state: 'done', summary, elapsedMs });
         console.log(`[pipeline] ${phase} done in ${(elapsedMs/1000).toFixed(1)}s — ${summary ?? ''}`);

@@ -1,4 +1,4 @@
-// Client wrapper for the DexKit tool sidecar, reached via the bridge at /tools/*.
+// Client wrapper for the DexKit tool sidecar, reached via the bridge at /tool/*.
 import { httpLog, preview } from './httpLog';
 
 const BASE = 'http://127.0.0.1:8792';
@@ -73,69 +73,69 @@ export interface ManifestResult {
 
 export const toolsClient = {
   // ── lifecycle ──────────────────────────────────────────────────
-  health: () => fetch(BASE + '/tools/health').then(r => r.json()),
-  list: () => fetch(BASE + '/tools/list').then(r => r.json()),
-  loaded: () => fetch(BASE + '/tools/loaded').then(r => r.json()),
+  health: () => fetch(BASE + '/tool/health').then(r => r.json()),
+  list: () => fetch(BASE + '/tool/list').then(r => r.json()),
+  loaded: () => fetch(BASE + '/tool/loaded').then(r => r.json()),
 
   load: (apkPath: string) =>
-    call<LoadResult>('/tools/load', { apk_path: apkPath }),
+    call<LoadResult>('/tool/load', { apk_path: apkPath }),
 
   // ── generic tool call ──────────────────────────────────────────
   // Use this for any tool by name. Args object is passed straight through.
   call: <T = any>(name: string, args: Record<string, unknown> = {}) =>
-    call<T>('/tools/' + name, args),
+    call<T>('/tool/' + name, args),
 
   // ── typed shortcuts for the common ones ────────────────────────
-  manifest: () => call<ManifestResult>('/tools/manifest', {}),
+  manifest: () => call<ManifestResult>('/tool/manifest', {}),
 
   findClassesByName: (name: string, limit = 100) =>
-    call<any>('/tools/find_classes_by_name', { name, limit }),
+    call<any>('/tool/find_classes_by_name', { name, limit }),
 
   findClassesUsingStrings: (strings: string[], limit = 100) =>
-    call<any>('/tools/find_classes_using_strings', { strings, limit }),
+    call<any>('/tool/find_classes_using_strings', { strings, limit }),
 
   findClassesImplementing: (iface: string, limit = 100) =>
-    call<any>('/tools/find_classes_implementing', { interface: iface, limit }),
+    call<any>('/tool/find_classes_implementing', { interface: iface, limit }),
 
   findMethodsUsingStrings: (strings: string[], limit = 100) =>
-    call<any>('/tools/find_methods_using_strings', { strings, limit }),
+    call<any>('/tool/find_methods_using_strings', { strings, limit }),
 
   listClassMethods: (fqcn: string, limit = 200) =>
-    call<any>('/tools/list_class_methods', { fqcn, limit }),
+    call<any>('/tool/list_class_methods', { fqcn, limit }),
 
   listClassStrings: (fqcn: string, limit = 200) =>
-    call<any>('/tools/list_class_strings', { fqcn, limit }),
+    call<any>('/tool/list_class_strings', { fqcn, limit }),
 
   decompileClass: (fqcn: string) =>
-    call<any>('/tools/decompile_class', { fqcn }),
+    call<any>('/tool/decompile_class', { fqcn }),
 
   decompileMethod: (fqcn: string, method: string) =>
-    call<any>('/tools/decompile_method', { fqcn, method }),
+    call<any>('/tool/decompile_method', { fqcn, method }),
 
   findCallSitesTo: (fqcn: string, method?: string, limit = 100) =>
-    call<any>('/tools/find_call_sites_to', { fqcn, method: method || '', limit }),
+    call<any>('/tool/find_call_sites_to', { fqcn, method: method || '', limit }),
 
   findCallSitesFrom: (fqcn: string, method?: string, limit = 100) =>
-    call<any>('/tools/find_call_sites_from', { fqcn, method: method || '', limit }),
+    call<any>('/tool/find_call_sites_from', { fqcn, method: method || '', limit }),
 
   findTypeReferences: (type: string, limit = 100) =>
-    call<any>('/tools/find_type_references', { type, limit }),
+    call<any>('/tool/find_type_references', { type, limit }),
 
   permissionCallers: (permissions: string[] = [], appOnly = true) =>
-    call<any>('/tools/permission_callers', { permissions, app_only: appOnly }),
+    call<any>('/tool/permission_callers', { permissions, app_only: appOnly }),
 
   extractIocs: (withXref = true) =>
-    call<any>('/tools/extract_iocs', { with_xref: withXref }),
+    call<any>('/tool/extract_iocs', { with_xref: withXref }),
 
   detectPermissiveTls: () =>
-    call<any>('/tools/detect_permissive_tls', {}),
+    call<any>('/tool/detect_permissive_tls', {}),
 
   detectContentProviders: () =>
-    call<any>('/tools/detect_content_providers', {}),
+    call<any>('/tool/detect_content_providers', {}),
 
   dangerousPermissionApiCallers: (appOnly = true) =>
-    call<any>('/tools/dangerous_permission_api_callers', { app_only: appOnly }),
+    call<any>('/tool/dangerous_permission_api_callers', { app_only: appOnly }),
 
   listValueStrings: (limit = 500) =>
-    call<any>('/tools/list_value_strings', { limit }),
+    call<any>('/tool/list_value_strings', { limit }),
 };

@@ -1,5 +1,5 @@
 // Standalone bot run — no pipeline, no LLM, no phases.
-// Loads an APK, runs the deterministic bot roster via /tools/bots_run_manager,
+// Loads an APK, runs the deterministic bot roster via /tool/bots_run_manager,
 // writes findings to the local DB under a synthetic job row so the
 // FINDINGS tab can display them with the same code path it uses for
 // pipeline-produced findings.
@@ -27,7 +27,7 @@ export async function runStandaloneBots(apkPath: string): Promise<StandaloneBots
 
   try {
     const t0 = Date.now();
-    const r = await fetch(`${BACKEND}/tools/bots_run_manager`, {
+    const r = await fetch(`${BACKEND}/tool/bots_run_manager`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: apkPath }),

@@ -42,7 +42,7 @@ export type JobState =
   | 'investigating' | 'coordinating' | 'proposing' | 'verifying'
   | 'exporting' | 'auditing'
   | 'waiting_review'                    // paused at review_gate
-  | 'done' | 'failed' | 'cancelled';
+  | 'done' | 'failed' | 'cancelled' | 'awaiting_user';
 
 export type PhaseState = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export type UnitState = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
@@ -68,6 +68,8 @@ export interface JobRecord {
   prioritiesJson: string | null;
   queueJson: string | null;
   planJson: string | null;
+  modifiedApkPath?: string | null;
+  reviewState?: string;
 }
 
 export interface PhaseRecord {
@@ -153,7 +155,9 @@ function rowToJob(r: any): JobRecord {
     prioritiesJson: r.priorities_json,
     queueJson: r.queue_json,
     planJson: r.plan_json,
-  };
+    modifiedApkPath: r.modified_apk_path ?? null,
+    reviewState: r.review_state ?? 'pending',
+};
 }
 
 function rowToPhase(r: any): PhaseRecord {
@@ -241,6 +245,7 @@ export const pipelineStore = {
       apkHash: input.apkHash ?? null, state: 'queued',
       currentPhase: null, currentFeature: null,
       startedAt: now, updatedAt: now, finishedAt: null, error: null,
+      modifiedApkPath: null, reviewState: 'pending',
       dsCalls: 0, dsElapsedMs: 0, dsTokens: 0, dsLastSession: null,
       prioritiesJson: null, queueJson: null, planJson: null,
     };
@@ -512,13 +517,14 @@ export const pipelineStore = {
   }>> {
     const db = await getDb();
     const rows = await db.getAllAsync<any>(
-      `SELECT id, type, kind, target, original, modified,
+      `SELECT id, type, kind, target, parent_dex, original, modified,
               original_hash, modified_hash, reverted
        FROM modifications WHERE job_id = ? ORDER BY kind, target`,
       [jobId],
     );
     return rows.map(r => ({
       id: r.id, type: r.type, kind: r.kind, target: r.target,
+      parentDex: r.parent_dex ?? null,
       original: r.original, modified: r.modified,
       originalHash: r.original_hash, modifiedHash: r.modified_hash,
       reverted: r.reverted === 1,
@@ -581,87 +587,10 @@ export const pipelineStore = {
   },
 
   // ── Units ────────────────────────────────────────────────────
-  async replaceUnits(jobId: string, units: Array<{
-    name: string; kind: string; brief?: string | null;
-    classes?: string[]; dexFiles?: string[];
-  }>): Promise<UnitRecord[]> {
-    const db = await getDb();
-    await db.runAsync(`DELETE FROM pipeline_units WHERE job_id = ?`, [jobId]);
-    const out: UnitRecord[] = [];
-    for (const u of units) {
-      const id = uuid();
-      await db.runAsync(
-        `INSERT INTO pipeline_units
-           (id, job_id, name, kind, brief, classes_json, dex_files_json, state)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        [
-          id, jobId, u.name, u.kind,
-          u.brief ?? null,
-          JSON.stringify(u.classes ?? []),
-          JSON.stringify(u.dexFiles ?? []),
-          'queued',
-        ]
-      );
-      out.push({
-        id, jobId, name: u.name, kind: u.kind,
-        brief: u.brief ?? null,
-        classesJson: JSON.stringify(u.classes ?? []),
-        dexFilesJson: JSON.stringify(u.dexFiles ?? []),
-        state: 'queued',
-        sessionId: null, turns: 0, tokens: 0,
-        startedAt: null, finishedAt: null, error: null,
-      });
-    }
-    return out;
-  },
 
-  async listUnits(jobId: string): Promise<UnitRecord[]> {
-    const db = await getDb();
-    const rows = await db.getAllAsync<any>(
-      `SELECT * FROM pipeline_units WHERE job_id = ? ORDER BY rowid ASC`, [jobId]
-    );
-    return rows.map(rowToUnit);
-  },
 
-  async updateUnit(unitId: string, patch: Partial<{
-    state: UnitState; sessionId: string | null; turns: number; tokens: number;
-    startedAt: number | null; finishedAt: number | null; error: string | null;
-  }>): Promise<void> {
-    const db = await getDb();
-    const fields: string[] = [];
-    const args: any[] = [];
-    if (patch.state !== undefined) { fields.push('state = ?'); args.push(patch.state); }
-    if (patch.sessionId !== undefined) { fields.push('session_id = ?'); args.push(patch.sessionId); }
-    if (patch.turns !== undefined) { fields.push('turns = ?'); args.push(patch.turns); }
-    if (patch.tokens !== undefined) { fields.push('tokens = ?'); args.push(patch.tokens); }
-    if (patch.startedAt !== undefined) { fields.push('started_at = ?'); args.push(patch.startedAt); }
-    if (patch.finishedAt !== undefined) { fields.push('finished_at = ?'); args.push(patch.finishedAt); }
-    if (patch.error !== undefined) { fields.push('error = ?'); args.push(patch.error); }
-    if (fields.length === 0) return;
-    args.push(unitId);
-    await db.runAsync(
-      `UPDATE pipeline_units SET ${fields.join(', ')} WHERE id = ?`, args
-    );
-  },
   // ── Investigations ──────────────────────────────────────────
-  async listInvestigations(jobId: string, limit = 100): Promise<any[]> {
-    const db = await getDb();
-    return db.getAllAsync<any>(
-      `SELECT id, unit_id, phase, query, tool_call_count, total_ms,
-              substr(final_answer, 1, 400) AS answer_preview, created_at
-         FROM finding_investigations
-         WHERE job_id = ?
-         ORDER BY created_at ASC LIMIT ?`,
-      [jobId, limit]
-    );
-  },
 
-  async getInvestigation(id: string): Promise<any | null> {
-    const db = await getDb();
-    return db.getFirstAsync<any>(
-      `SELECT * FROM finding_investigations WHERE id = ?`, [id]
-    );
-  },
 
   async getFullAnswer(id: string): Promise<string> {
     const db = await getDb();
@@ -672,16 +601,6 @@ export const pipelineStore = {
   },
 
   // ── Agent steps (for the UI step trace) ─────────────────────
-  async listAgentSteps(jobId: string, limit = 500): Promise<any[]> {
-    const db = await getDb();
-    return db.getAllAsync<any>(
-      `SELECT iteration, phase, kind, tool, result_chars, elapsed_ms, ts
-         FROM agent_steps
-         WHERE job_id = ?
-         ORDER BY id ASC LIMIT ?`,
-      [jobId, limit]
-    );
-  },
 
   // ── Job-level raw final answer log (for parse-fail diagnostics) ──
   async logRawAnswer(jobId: string, phase: string, raw: string): Promise<void> {

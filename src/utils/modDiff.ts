@@ -1,5 +1,5 @@
 // Client for the mod-diff pipeline. Reads two APK paths, calls the
-// sidecar's /tools/apk_diff_run route, returns a modification inventory.
+// sidecar's /tool/apk_diff_run route, returns a modification inventory.
 // The inventory is display-only until the user checks REVERT on
 // individual items — nothing is written back to any APK until the
 // recombine step, and the recombine step only produces an APK reverted
@@ -33,7 +33,7 @@ export async function runModCompare(
     throw new Error('both APK paths required');
   }
   const t0 = Date.now();
-  const r = await fetch(`${BACKEND}/tools/apk_diff_run`, {
+  const r = await fetch(`${BACKEND}/tool/apk_diff_run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -68,7 +68,7 @@ export async function requestRevert(
   toRevert: Modification[],
   outputPath: string,
 ): Promise<{ ok: boolean; output?: string; error?: string }> {
-  const r = await fetch(`${BACKEND}/tools/apk_revert_run`, {
+  const r = await fetch(`${BACKEND}/tool/apk_revert_run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

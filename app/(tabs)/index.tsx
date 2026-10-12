@@ -1,155 +1,194 @@
-import React, { useCallback, useEffect, useState } from 'react';
+// JOBS — the whole deterministic pipeline, one page.
+//
+// Top: TARGET (from file picker) + REFERENCE URL field.
+// Run: one button, enabled once a reference URL is present.
+// Paused: inline review list with checkboxes + DECIDE + RESUME.
+// Done: findings summary inline.
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, RefreshControl, Pressable, Alert, TextInput,
+  View, Text, StyleSheet, ScrollView, Pressable,
+  TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
 import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
-import { investigateRunner } from '@/pipeline/investigateRunner';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
-import type { PhaseId } from '@/pipeline/pipelineRunner';
-import type { AgentStep } from '@/agent/agentLoop';
-import { classLoader } from '@/classdata/classLoader';
 
-interface StagedApk {
-  path: string;
-  size: number;
-  name: string;
-}
+const DEFAULT_REFERENCE = '/data/data/com.termux/files/home/fixtures/pubg-modded.apk';
 
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-}
+const TYPE_COLOR: Record<string, string> = {
+  ADDED: '#FF3B30',
+  REMOVED: '#FF9500',
+  MODIFIED: '#FFCC00',
+};
 
-function fmtAgo(ts: number | null): string {
-  if (!ts) return '—';
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 5) return 'now';
-  if (s < 60) return s + 's ago';
-  if (s < 3600) return Math.floor(s / 60) + 'm ago';
-  return Math.floor(s / 3600) + 'h ago';
+interface ModRow {
+  id: string;
+  type: string;
+  kind: string;
+  target: string;
+  parentDex: string | null;
+  original: string | null;
+  modified: string | null;
+  originalHash: string | null;
+  modifiedHash: string | null;
+  reverted: boolean;
 }
 
 export default function JobsTab() {
-  const [staged, setStaged] = useState<StagedApk[]>([]);
-  const [selected, setSelected] = useState<StagedApk | null>(null);
-  const [picking, setPicking] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [targetPath, setTargetPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+  const [referencePath, setReferencePath] = useState(DEFAULT_REFERENCE);
   const [running, setRunning] = useState(false);
-  const [runStatus, setRunStatus] = useState<string | null>(null);
-  const [liveSteps, setLiveSteps] = useState<string[]>([]);
-  const [directPath, setDirectPath] = useState('');
-  const [directModifiedPath, setDirectModifiedPath] = useState('');
-  const [directRunning, setDirectRunning] = useState(false);
-  const [directStatus, setDirectStatus] = useState<string | null>(null);
-  const [directSteps, setDirectSteps] = useState<string[]>([]);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
+  const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
+  const [mods, setMods] = useState<ModRow[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [userInteracted, setUserInteracted] = useState(false);
 
-  const loadStaged = useCallback(async () => {
-    const list = await apkPicker.list();
-    setStaged(list);
-    if (list.length > 0 && !selected) setSelected(list[0]);
-  }, [selected]);
+  const reloadMods = useCallback(async (jobId: string) => {
+    const ms = await pipelineStore.listModifications(jobId) as ModRow[];
+    setMods(ms);
+    setSelected(new Set());
+    setUserInteracted(false);
+  }, []);
 
-  const loadJobs = useCallback(async () => {
+  const loadJob = useCallback(async (jobId: string) => {
+    const j = await pipelineStore.getJob(jobId);
+    setCurrentJob(j);
+    if (!j) return;
+    const phases = await pipelineStore.getPhases(jobId);
+    setSteps(phases.map((p: any) =>
+      '[' + p.phase + '] ' + p.state + (p.summary ? ' — ' + p.summary : '')));
+    const timing = phases
+      .filter((p: any) => p.startedAt && p.finishedAt)
+      .map((p: any) => p.phase + '=' + ((p.finishedAt - p.startedAt) / 1000).toFixed(1) + 's')
+      .join(' ');
+    setStatus((j.state || '?') + ' · ' + phases.length + ' phases' + (timing ? '\n' + timing : ''));
+    if (j.state === 'awaiting_user') {
+      await reloadMods(jobId);
+    } else {
+      setMods([]);
+      setSelected(new Set());
+    }
+  }, [reloadMods]);
+
+  // Restore latest job on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const jobs = await pipelineStore.listJobs(1);
+        if (jobs.length) await loadJob(jobs[0].id);
+      } catch {}
+    })();
+  }, [loadJob]);
+
+  const pickTarget = useCallback(async () => {
     try {
-      const list = await pipelineStore.listJobs(20);
-      setJobs(list);
-    } catch {
-      setJobs([]);
+      const p = await apkPicker.pick();
+      const target = p?.stagedPath || p?.sourceUri || null;
+      if (target) setTargetPath(String(target));
+    } catch (e) {
+      Alert.alert('Pick failed', (e as Error).message);
     }
   }, []);
 
-  const refreshSilent = useCallback(async () => {
-    await loadStaged();
-    await loadJobs();
-  }, [loadStaged, loadJobs]);
+  const runPipeline = useCallback(async () => {
+    if (running) return;
+    if (!targetPath.trim()) { Alert.alert('No TARGET APK'); return; }
+    if (!referencePath.trim()) { Alert.alert('No REFERENCE URL'); return; }
 
-  const refreshManual = useCallback(async () => {
-    setRefreshing(true);
-    await refreshSilent();
-    setRefreshing(false);
-  }, [refreshSilent]);
+    setRunning(true);
+    setSteps([]);
+    setMods([]);
+    setSelected(new Set());
+    setUserInteracted(false);
+    setStatus('creating job…');
 
-  useEffect(() => {
-    void refreshSilent();
-    const t = setInterval(() => { void refreshSilent(); }, 3000);
-    return () => clearInterval(t);
-  }, [refreshSilent]);
-
-  const doPick = async () => {
-    setPicking(true);
-    setRunStatus(null);
     try {
-      const picked = await apkPicker.pick();
-      if (picked) {
-        await loadStaged();
-        setSelected({ path: picked.stagedPath, size: picked.size, name: picked.originalName });
-        setRunStatus('staged: ' + picked.originalName + ' (' + fmtSize(picked.size) + ') in ' + picked.copiedMs + 'ms');
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert('Pick failed', msg);
-      setRunStatus('FAIL · ' + msg);
-    }
-    setPicking(false);
-  };
-
-  const runDirect = async () => {
-    if (directRunning) return;
-    const path = directPath.trim();
-    if (!path) { Alert.alert('No path'); return; }
-    setDirectRunning(true);
-    setDirectSteps([]);
-    setDirectStatus('creating job…');
-    try {
-      const name = path.split('/').pop() || 'target.apk';
+      const name = targetPath.split('/').pop() || 'target.apk';
       const job = await pipelineStore.createJob({
         scanId: 'pipe-' + Date.now(),
-        apkPath: path,
+        apkPath: targetPath.trim(),
         apkName: name,
         apkSize: 0,
       });
       await pipelineStore.createPhasesForJob(job.id);
+      await pipelineStore.setModifiedApkPath(job.id, referencePath.trim());
 
-      // Persist the reference path (if given) so the diff phase has a
-      // target to compare against. When empty, the pipeline runs the
-      // deterministic chain with no diff — modBots and revert become
-      // no-ops and only the phases that don't need a reference run.
-      const modifiedPath = directModifiedPath.trim();
-      if (modifiedPath) {
-        await pipelineStore.setModifiedApkPath(job.id, modifiedPath);
-      }
-
+      const startedAt = Date.now();
       const result = await pipelineRunner.run(job.id, {
         onPhase: (phase, state, summary) => {
-          setDirectSteps(prev => [...prev, '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
-        },
-        onStep: (phase, step) => {
-          const label = step.kind === 'tool'
-            ? '  ' + phase + ' #' + step.iteration + ' tool ' + step.tool + ' (' + (step.elapsedMs ?? 0) + 'ms, ' + (step.resultChars ?? 0) + 'B)'
-            : step.kind === 'final'
-              ? '  ' + phase + ' #' + step.iteration + ' final'
-              : '  ' + phase + ' #' + step.iteration + ' parse_error';
-          setDirectSteps(prev => [...prev, label]);
+          setSteps(prev => [...prev, '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
+          const el = ((Date.now() - startedAt) / 1000).toFixed(1);
+          setStatus('RUNNING · ' + phase + ' · ' + state + ' · ' + el + 's');
         },
       });
 
       const elapsed = result.finishedAt - result.startedAt;
-      setDirectStatus(
-        result.finalState + ' · ' + result.outcomes.length + ' phases · ' + elapsed + 'ms'
-      );
-      await loadJobs();
+      const timing = result.outcomes.map(o =>
+        o.phase + '=' + (o.elapsedMs / 1000).toFixed(1) + 's').join(' ');
+      setStatus(result.finalState + ' · ' + result.outcomes.length + ' phases · ' +
+        elapsed + 'ms\n' + timing);
+      await loadJob(job.id);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setDirectStatus('FAIL · ' + msg);
+      setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
     }
-    setDirectRunning(false);
-  };
+    setRunning(false);
+  }, [running, targetPath, referencePath, loadJob]);
+
+  const toggle = useCallback(async (id: string) => {
+    setUserInteracted(true);
+    const next = !selected.has(id);
+    const s = new Set(selected);
+    if (next) s.add(id); else s.delete(id);
+    setSelected(s);
+    await pipelineStore.setModificationReverted(id, next);
+  }, [selected]);
+
+  const toggleAll = useCallback(async (group: ModRow[], on: boolean) => {
+    setUserInteracted(true);
+    const s = new Set(selected);
+    for (const m of group) {
+      if (on) s.add(m.id); else s.delete(m.id);
+      await pipelineStore.setModificationReverted(m.id, on);
+    }
+    setSelected(s);
+  }, [selected]);
+
+  const decideAndResume = useCallback(async () => {
+    if (!currentJob || busy) return;
+    if (selected.size === 0) { Alert.alert('Mark at least one item'); return; }
+    setBusy(true);
+    try {
+      await pipelineStore.setReviewState(currentJob.id, 'decided');
+      setStatus('running revert → export → audit…');
+      const r = await pipelineRunner.run(currentJob.id, { fromPhase: 'revert' as any });
+      setStatus(r.finalState + ' · ' + r.outcomes.length + ' phases · ' +
+        (r.finishedAt - r.startedAt) + 'ms');
+      await loadJob(currentJob.id);
+    } catch (e) {
+      setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
+    }
+    setBusy(false);
+  }, [currentJob, busy, selected, loadJob]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, ModRow[]>();
+    for (const m of mods) {
+      const key = m.parentDex || ('[' + m.kind + ']');
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(m);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [mods]);
+
+  const phaseState = currentJob?.state;
+  const showReview = phaseState === 'awaiting_user';
 
   return (
     <View style={styles.container}>
@@ -157,205 +196,239 @@ export default function JobsTab() {
         <Text style={styles.topBarTitle}>MODKIT · JOBS</Text>
       </View>
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshManual} tintColor={colors.accent} />}
-      >
+      <ScrollView contentContainerStyle={styles.content}>
+        {/* SELECT APK */}
         <View style={styles.block}>
           <Text style={styles.blockLabel}>SELECT APK</Text>
           <Text style={styles.help}>
-            Pick any .apk from device storage. It is copied to
-            /storage/emulated/0/Download/modkit-apks/ so the Termux backend
-            can read it. No HTTP upload.
+            Pick the TARGET .apk. Currently: {targetPath.split('/').pop()}
           </Text>
-          <Pressable
-            onPress={doPick}
-            disabled={picking || running}
-            style={[styles.primaryBtn, (picking || running) && { opacity: 0.5 }]}
-          >
-            <Text style={styles.primaryBtnText}>
-              {picking ? 'COPYING…' : 'SELECT APK'}
-            </Text>
+          <Pressable onPress={pickTarget} style={styles.primaryBtn}>
+            <Text style={styles.primaryBtnText}>SELECT APK</Text>
           </Pressable>
         </View>
 
-        {staged.length > 0 && (
-          <View style={styles.block}>
-            <Text style={styles.blockLabel}>STAGED ({staged.length})</Text>
-            {staged.map((s) => {
-              const isSel = selected && selected.path === s.path;
-              return (
-                <Pressable
-                  key={s.path}
-                  onPress={() => setSelected(s)}
-                  style={[styles.apkRow, isSel && styles.apkRowSel]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.apkName} numberOfLines={1}>{s.name}</Text>
-                    <Text style={styles.apkPath} numberOfLines={1}>{s.path}</Text>
-                  </View>
-                  <Text style={styles.apkSize}>{fmtSize(s.size)}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-
+        {/* RUN PIPELINE */}
         <View style={styles.block}>
           <Text style={styles.blockLabel}>RUN PIPELINE</Text>
           <Text style={styles.help}>
-            Deterministic chain: import → decompile → diff → modBots → review_gate → revert → export → audit.
-            Zero LLM calls. Set the reference below to enable diff + revert.
+            Deterministic chain: import → decompile → diff → modBots →
+            review_gate → revert → export → audit. Zero LLM calls.
           </Text>
 
-          <Text style={[styles.blockLabel, { marginTop: 10, marginBottom: 6, fontSize: 9 }]}>
-            TARGET APK (required)
-          </Text>
+          <Text style={[styles.miniLabel, { marginTop: 10 }]}>TARGET APK</Text>
+          <Text style={styles.pathText} numberOfLines={2}>{targetPath}</Text>
+
+          <Text style={[styles.miniLabel, { marginTop: 10 }]}>REFERENCE APK URL</Text>
           <TextInput
-            value={directPath}
-            onChangeText={setDirectPath}
-            style={styles.pathInput}
+            value={referencePath}
+            onChangeText={setReferencePath}
+            style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}
-            editable={!directRunning}
-            placeholder="/storage/emulated/0/.../target.apk"
+            editable={!running}
+            placeholder="/data/data/.../fixtures/pubg-modded.apk"
             placeholderTextColor={colors.textTertiary}
           />
-
-          <Text style={[styles.blockLabel, { marginTop: 10, marginBottom: 6, fontSize: 9 }]}>
-            REFERENCE APK (optional — enables diff)
+          <Text style={[styles.help, {
+            color: referencePath.trim() ? colors.accent : colors.danger,
+            marginTop: 4,
+          }]}>
+            {referencePath.trim()
+              ? 'REFERENCE SET · READY'
+              : 'REFERENCE EMPTY — paste a path'}
           </Text>
-          <TextInput
-            value={directModifiedPath}
-            onChangeText={setDirectModifiedPath}
-            style={styles.pathInput}
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!directRunning}
-            placeholder="/storage/emulated/0/.../original.apk"
-            placeholderTextColor={colors.textTertiary}
-          />
 
-          <Pressable
-            onPress={runDirect}
-            disabled={directRunning}
-            style={[styles.runBtn, directRunning && { opacity: 0.5 }]}
-          >
-            <Text style={styles.runBtnText}>
-              {directRunning
-                ? 'PIPELINE RUNNING…'
-                : (directModifiedPath.trim() ? 'RUN PIPELINE · DIFF MODE' : 'RUN PIPELINE · SCAN MODE')}
-            </Text>
-          </Pressable>
-          {directStatus && (
-            <Text
-              style={[
-                styles.statusText,
-                directStatus.startsWith('FAIL') && { color: colors.danger },
-              ]}
+          {referencePath.trim().length > 0 && (
+            <Pressable
+              onPress={runPipeline}
+              disabled={running}
+              style={[styles.primaryBtn, { marginTop: 12 }, running && styles.btnDisabled]}
             >
-              {directStatus}
-            </Text>
+              <Text style={styles.primaryBtnText}>
+                {running ? 'PIPELINE RUNNING…' : 'RUN PIPELINE · TARGET vs REFERENCE'}
+              </Text>
+            </Pressable>
           )}
-          {directSteps.length > 0 && (
-            <View style={{ marginTop: 8 }}>
-              {directSteps.map((line, i) => (
-                <Text key={i} style={styles.stepText}>{line}</Text>
-              ))}
-            </View>
+
+          {status && (
+            <Text style={[styles.status, status.startsWith('FAIL') && { color: '#FF3B30' }]}>
+              {status}
+            </Text>
           )}
         </View>
 
+        {/* PHASE LOG */}
+        {steps.length > 0 && (
+          <View style={styles.block}>
+            <Text style={styles.blockLabel}>PHASES</Text>
+            {steps.map((s, i) => (
+              <Text key={i} style={styles.stepLine}>{s}</Text>
+            ))}
+          </View>
+        )}
+
+        {/* INLINE REVIEW — appears when paused */}
+        {showReview && (
+          <View style={styles.block}>
+            <Text style={styles.blockLabel}>
+              {'REVIEW · ' + mods.length + ' MODIFICATION' + (mods.length === 1 ? '' : 'S')}
+            </Text>
+            {mods.length === 0 && (
+              <Text style={styles.help}>
+                No modifications to review. The diff phase found nothing — usually
+                because the reference is byte-identical to the target.
+              </Text>
+            )}
+            {mods.length > 0 && (
+              <>
+                <Text style={styles.help}>
+                  {selected.size} marked for revert. Grouped by parent dex.
+                </Text>
+                {grouped.map(([key, group]) => {
+                  const open = expanded[key] !== false;
+                  const groupSel = group.filter(m => selected.has(m.id)).length;
+                  return (
+                    <View key={key} style={styles.group}>
+                      <Pressable
+                        onPress={() => setExpanded(e => ({ ...e, [key]: !(e[key] !== false) }))}
+                        style={styles.groupHeader}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.groupTitle} numberOfLines={1}>{key}</Text>
+                          <Text style={styles.groupMeta}>
+                            {group.length + ' item' + (group.length === 1 ? '' : 's') +
+                             ' · ' + groupSel + ' selected'}
+                          </Text>
+                        </View>
+                        <Text style={styles.groupChevron}>{open ? '▾' : '▸'}</Text>
+                      </Pressable>
+                      <View style={styles.groupActions}>
+                        <Pressable onPress={() => toggleAll(group, true)} style={[styles.miniBtn, styles.miniOn]}>
+                          <Text style={styles.miniTextOn}>ALL</Text>
+                        </Pressable>
+                        <Pressable onPress={() => toggleAll(group, false)} style={styles.miniBtn}>
+                          <Text style={styles.miniText}>NONE</Text>
+                        </Pressable>
+                      </View>
+                      {open && group.map(m => {
+                        const on = selected.has(m.id);
+                        const tone = TYPE_COLOR[m.type] || '#8E8E93';
+                        return (
+                          <Pressable key={m.id} onPress={() => toggle(m.id)}
+                            style={[styles.modRow, on && styles.modRowOn]}>
+                            <View style={[styles.checkbox, on && styles.checkboxOn]}>
+                              {on && <Text style={styles.checkMark}>✓</Text>}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <View style={styles.modTop}>
+                                <View style={[styles.pill, { backgroundColor: tone }]}>
+                                  <Text style={styles.pillText}>{m.type}</Text>
+                                </View>
+                                <Text style={styles.kindText}>{m.kind}</Text>
+                              </View>
+                              <Text style={styles.targetText} numberOfLines={2}>{m.target}</Text>
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  );
+                })}
+
+                <Pressable
+                  onPress={decideAndResume}
+                  disabled={busy || selected.size === 0 || !userInteracted}
+                  style={[styles.decideBtn, (busy || selected.size === 0) && styles.btnDisabled]}
+                >
+                  <Text style={styles.decideText}>
+                    {busy ? 'RESUMING…' : 'DECIDE + RESUME · ' + selected.size + ' reverted'}
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Recent jobs */}
         <View style={styles.block}>
-          <Text style={styles.blockLabel}>RECENT JOBS ({jobs.length})</Text>
-          {jobs.length === 0 && (
-            <Text style={styles.help}>No jobs yet.</Text>
-          )}
-          {jobs.map((j) => (
-            <View key={j.id} style={styles.jobRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.jobTitle} numberOfLines={1}>
-                  [{j.state}] {j.apkName || j.apkPath.split('/').pop()}
-                </Text>
-                <Text style={styles.jobMeta}>
-                  {j.currentPhase || '—'} · ds {j.dsCalls} calls · {fmtAgo(j.updatedAt)}
-                </Text>
-              </View>
-            </View>
-          ))}
+          <Text style={styles.blockLabel}>RECENT</Text>
+          <RecentJobs onPick={(id) => loadJob(id)} />
         </View>
+
+        {busy && <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />}
       </ScrollView>
     </View>
   );
 }
 
+function RecentJobs({ onPick }: { onPick: (id: string) => void }) {
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  useEffect(() => {
+    (async () => {
+      const list = await pipelineStore.listJobs(5);
+      setJobs(list);
+    })();
+  }, []);
+  return (
+    <>
+      {jobs.map(j => (
+        <Pressable key={j.id} onPress={() => onPick(j.id)} style={styles.jobRow}>
+          <Text style={styles.jobName} numberOfLines={1}>{j.apkName || j.id.slice(0, 12)}</Text>
+          <Text style={styles.jobState}>{j.state}</Text>
+        </Pressable>
+      ))}
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.pureBlack },
-  topBar: {
-    paddingHorizontal: spacing.md, paddingVertical: spacing.md,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
+  topBar: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  topBarTitle: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 2 },
+  content: { padding: spacing.md, paddingBottom: 60 },
+  block: { marginBottom: spacing.md, padding: spacing.md, backgroundColor: colors.surface, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
+  blockLabel: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10, letterSpacing: 2, marginBottom: 8 },
+  miniLabel: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 9, letterSpacing: 2, marginBottom: 4 },
+  help: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 11, lineHeight: 16 },
+  pathText: { color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 15, marginBottom: 4 },
+  input: {
+    color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10,
+    backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1,
+    borderColor: colors.border, paddingHorizontal: 8, paddingVertical: 8,
   },
-  topBarTitle: {
-    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 2,
-  },
-  scroll: { flex: 1 },
-  content: { padding: spacing.md },
-  block: {
-    marginBottom: spacing.md, padding: spacing.md,
-    backgroundColor: colors.surface, borderRadius: 8,
-    borderWidth: 1, borderColor: colors.border,
-  },
-  blockLabel: {
-    color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10,
-    letterSpacing: 2, marginBottom: 8,
-  },
-  help: {
-    color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 11,
-    lineHeight: 16, marginBottom: 8,
-  },
-  primaryBtn: {
-    backgroundColor: colors.accent, borderRadius: 6,
-    paddingVertical: 12, alignItems: 'center', marginTop: 4,
-  },
-  primaryBtnText: {
-    color: colors.pureBlack, fontFamily: 'Inter-SemiBold',
-    fontSize: 12, letterSpacing: 1,
-  },
-  runBtn: {
-    backgroundColor: colors.accent, borderRadius: 6,
-    paddingVertical: 12, alignItems: 'center', marginTop: 4,
-  },
-  runBtnText: {
-    color: colors.pureBlack, fontFamily: 'Inter-SemiBold',
-    fontSize: 12, letterSpacing: 1,
-  },
-  apkRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, paddingHorizontal: 8,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  apkRowSel: { backgroundColor: 'rgba(0,255,136,0.08)' },
-  apkName: { color: colors.textPrimary, fontFamily: 'Inter-Medium', fontSize: 12 },
-  apkPath: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 2 },
-  apkSize: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 11, marginLeft: 8 },
-  statusText: {
-    color: colors.accent, fontFamily: 'JetBrainsMono-Regular',
-    fontSize: 10, marginTop: 10, lineHeight: 14,
-  },
-  stepText: {
-    color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular',
-    fontSize: 10, lineHeight: 14,
-  },
-  pathInput: {
-    color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular',
-    fontSize: 10, backgroundColor: colors.pureBlack,
-    borderRadius: 6, borderWidth: 1, borderColor: colors.border,
-    padding: 8, marginBottom: 8,
-  },
-  jobRow: {
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  jobTitle: { color: colors.textPrimary, fontFamily: 'Inter-Medium', fontSize: 12 },
-  jobMeta: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginTop: 2 },
+  primaryBtn: { backgroundColor: colors.accent, borderRadius: 6, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
+  primaryBtnText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 1 },
+  btnDisabled: { opacity: 0.4 },
+  status: { color: colors.accent, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, marginTop: 12, lineHeight: 15 },
+  stepLine: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 15 },
+
+  group: { marginTop: 10, backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingBottom: 6 },
+  groupTitle: { color: colors.textPrimary, fontFamily: 'Inter-SemiBold', fontSize: 12 },
+  groupMeta: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginTop: 2 },
+  groupChevron: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 14, marginLeft: 8 },
+  groupActions: { flexDirection: 'row', gap: 6, paddingHorizontal: spacing.md, paddingBottom: 8 },
+  miniBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 4, borderWidth: 1, borderColor: colors.border },
+  miniOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  miniText: { color: colors.textTertiary, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1 },
+  miniTextOn: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1 },
+
+  modRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: spacing.md, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  modRowOn: { backgroundColor: 'rgba(0,255,136,0.06)' },
+  checkbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  checkboxOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  checkMark: { color: colors.pureBlack, fontFamily: 'Inter-Bold', fontSize: 12 },
+  modTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  pill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
+  pillText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 8, letterSpacing: 0.5 },
+  kindText: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 9 },
+  targetText: { color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 14 },
+
+  decideBtn: { marginTop: 12, backgroundColor: colors.accent, borderRadius: 6, paddingVertical: 14, alignItems: 'center' },
+  decideText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 1 },
+
+  jobRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+  jobName: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, flex: 1 },
+  jobState: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginLeft: 8 },
 });

@@ -14,7 +14,7 @@ import { MIGRATION_V7 } from './migrations/v7_orchestration';
 // SQLite schema + migration steps for the scan history database.
 // Bump SCHEMA_VERSION whenever the shape changes; migrations run in order.
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 export const DB_NAME = 'modkit-v3.db';
 
 export interface ScanRecord {
@@ -273,4 +273,17 @@ export const MIGRATIONS: string[][] = [
   [MIGRATION_V18],
   // v19 — confidence scoring
   [MIGRATION_V19],
+  // v20 — review-gate wiring. Adds parent_dex so the UI can group
+  // class findings under their dex, and drops LLM-only tables that
+  // the deterministic chain never touches.
+  [
+    `ALTER TABLE modifications ADD COLUMN parent_dex TEXT`,
+    `DROP TABLE IF EXISTS pipeline_chats`,
+    `DROP TABLE IF EXISTS pipeline_units`,
+    `DROP TABLE IF EXISTS agent_steps`,
+    `DROP TABLE IF EXISTS finding_investigations`,
+    `DROP TABLE IF EXISTS findings_archive`,
+    `DROP TABLE IF EXISTS finding_artifacts`,
+    `DROP TABLE IF EXISTS class_cache`,
+  ],
 ];
