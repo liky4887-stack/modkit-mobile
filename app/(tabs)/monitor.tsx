@@ -164,7 +164,7 @@ export default function MonitorTab() {
     return { byName, currentPhase, currentProgress, pct, remainingMs, elapsedTotal };
   }, [job, phases, units, tickNow]);
 
-  const enhancedApk = plan?.enhanced_apk || plan?.recombination?.final_apk || null;
+  const enhancedApk = plan?.clean_apk || plan?.enhanced_apk || plan?.recombination?.final_apk || null;
 
   if (!job) {
     return (
@@ -334,9 +334,9 @@ export default function MonitorTab() {
           >
             <Text style={styles.downloadTitle}>ENHANCED APK READY</Text>
             <Text style={styles.downloadPath} numberOfLines={2}>{enhancedApk}</Text>
-            {plan?.final_size && (
+            {(plan?.clean_size || plan?.final_size) && (
               <Text style={styles.downloadMeta}>
-                {(plan.final_size / 1e9).toFixed(2)} GB · tap to open
+                {(((plan.clean_size || plan.final_size) as number) / 1e9).toFixed(2)} GB · tap to open
               </Text>
             )}
             {plan?.orchestration_verdict && (
@@ -349,6 +349,12 @@ export default function MonitorTab() {
         {job.state === 'done' && plan && (
           <View style={styles.block}>
             <Text style={styles.blockLabel}>AUDIT</Text>
+            {plan.reverted_count != null && (
+              <Text style={styles.auditLine}>
+                reverted: {plan.reverted_count} item(s)
+                {plan.reverted_dexes?.length ? ' · dexes: ' + plan.reverted_dexes.join(', ') : ''}
+              </Text>
+            )}
             {plan.integrity && (
               <>
                 <Text style={styles.auditLine}>

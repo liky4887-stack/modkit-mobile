@@ -541,17 +541,19 @@ export const pipelineStore = {
 
   async listRevertedModifications(jobId: string): Promise<Array<{
     id: string; type: string; kind: string; target: string;
+    parentDex: string | null;
     originalHash: string | null; modifiedHash: string | null;
   }>> {
     const db = await getDb();
     const rows = await db.getAllAsync<any>(
-      `SELECT id, type, kind, target, original_hash, modified_hash
+      `SELECT id, type, kind, target, parent_dex, original_hash, modified_hash
        FROM modifications WHERE job_id = ? AND reverted = 1
        ORDER BY kind, target`,
       [jobId],
     );
     return rows.map(r => ({
       id: r.id, type: r.type, kind: r.kind, target: r.target,
+      parentDex: r.parent_dex ?? null,
       originalHash: r.original_hash, modifiedHash: r.modified_hash,
     }));
   },

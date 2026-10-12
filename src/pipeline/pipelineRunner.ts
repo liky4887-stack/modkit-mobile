@@ -548,6 +548,7 @@ async function phaseRevert(ctx: PhaseContext): Promise<string> {
         modified_apk: modifiedApk,
         revert: reverted.map(m => ({
           type: m.type, kind: m.kind, target: m.target,
+          parent_dex: m.parentDex,
           original_hash: m.originalHash, modified_hash: m.modifiedHash,
         })),
         output_path: outputPath,

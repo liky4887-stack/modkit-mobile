@@ -16,7 +16,7 @@ import { apkPicker } from '@/upload/apkPicker';
 import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
 
-const DEFAULT_REFERENCE = '/data/data/com.termux/files/home/fixtures/pubg-modded.apk';
+const DEFAULT_REFERENCE = '/data/data/com.termux/files/home/fixtures/pubg-method-edit.apk';
 
 const TYPE_COLOR: Record<string, string> = {
   ADDED: '#FF3B30',

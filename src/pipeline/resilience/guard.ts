@@ -20,9 +20,13 @@ function classifyEndpoint(url: string): EndpointId {
   if (url.includes('/deepseek/chat')) return 'deepseek/chat';
   if (url.includes('/orchestration/sync')) return 'orchestration/sync';
   if (url.includes('/executeCommand')) return 'executeCommand';
-  if (url.includes('/tools/load')) return 'tools/load';
-  if (url.includes('/tools/find_classes_by_name')) return 'tools/find_classes_by_name';
-  if (url.includes('/tools/extract_iocs')) return 'tools/extract_iocs';
+  // Sidecar canonical route prefix is /tool/ (singular). The legacy
+  // /tools/ path is kept as a fallback so historical callers still map.
+  if (url.includes('/tool/load') || url.endsWith('/load')) return 'tools/load';
+  if (url.includes('/tool/find_classes_by_name') || url.includes('/tools/find_classes_by_name'))
+    return 'tools/find_classes_by_name';
+  if (url.includes('/tool/extract_iocs') || url.includes('/tools/extract_iocs'))
+    return 'tools/extract_iocs';
   if (url.includes('/file/read')) return 'file/read';
   if (url.includes('/file/write')) return 'file/write';
   if (url.includes('/health')) return 'health';
