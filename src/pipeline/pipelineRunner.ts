@@ -339,153 +339,6 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
          ' load=' + load.load_ms + 'ms';
 }
 
-async function phaseDecompile(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8792';
-  const originalApk = ctx.job.apkPath;
-  const modifiedApk = (ctx.job as any).modifiedApkPath;
-  if (!originalApk) return 'no original APK path';
-  if (!modifiedApk) return 'no modified APK path set on job — nothing to diff';
-
-  ctx.emit('decompile', 'start', 'planning dex extraction for both APKs');
-
-  try {
-    const [a, b] = await Promise.all([
-      fetch(BACKEND + '/tool/apk_dex_list', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apk_path: originalApk }),
-      }).then(r => r.json()),
-      fetch(BACKEND + '/tool/apk_dex_list', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apk_path: modifiedApk }),
-      }).then(r => r.json()),
-    ]);
-    if (!a.ok) return 'original dex list failed: ' + (a.error || 'unknown');
-    if (!b.ok) return 'modified dex list failed: ' + (b.error || 'unknown');
-    return (
-      'original ' + a.dex_count + ' dex / ' +
-      (a.total_uncompressed_bytes / 1e6).toFixed(1) + ' MB · ' +
-      'modified ' + b.dex_count + ' dex / ' +
-      (b.total_uncompressed_bytes / 1e6).toFixed(1) + ' MB'
-    );
-  } catch (e) {
-    return 'decompile error: ' + (e as Error).message.slice(0, 180);
-  }
-}
-
-async function phaseDiff(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8792';
-  const originalApk = ctx.job.apkPath;
-  const modifiedApk = (ctx.job as any).modifiedApkPath;
-  if (!originalApk || !modifiedApk) return 'missing apk paths';
-
-  ctx.emit('diff', 'start', 'comparing two APKs');
-
-  try {
-    const r = await fetch(BACKEND + '/tool/apk_diff_run', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ original_apk: originalApk, modified_apk: modifiedApk }),
-    });
-    const j: any = await r.json();
-    if (!j.ok) return 'diff failed: ' + (j.error || 'unknown');
-
-    const mods = (j.modifications || []) as any[];
-    // wipe any prior rows for this job so ids never collide
-    try { await (await (await import('@/db/client')).getDb()).runAsync('DELETE FROM modifications WHERE job_id = ?', [ctx.job.id]); } catch {}
-    if (mods.length === 0) return 'no modifications found';
-
-    // Write each modification into the modifications table.
-    const db = await (await import('@/db/client')).getDb();
-    const now = Date.now();
-    let inserted = 0;
-    for (const m of mods) {
-      try {
-        await db.runAsync(
-          `INSERT OR REPLACE INTO modifications
-           (id, job_id, type, kind, target, parent_dex, original, modified,
-            original_hash, modified_hash, reverted, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`,
-          [
-            ctx.job.id.slice(0, 8) + '_' + String(m.id || ('m_' + Math.random().toString(36).slice(2, 10))),
-            ctx.job.id,
-            String(m.type || 'MODIFIED').slice(0, 16),
-            String(m.kind || 'unknown').slice(0, 32),
-            String(m.target || '').slice(0, 400),
-            m.parent_dex != null ? String(m.parent_dex).slice(0, 200) : null,
-            m.original != null ? String(m.original).slice(0, 4000) : null,
-            m.modified != null ? String(m.modified).slice(0, 4000) : null,
-            m.original_hash ?? null,
-            m.modified_hash ?? null,
-            now,
-          ],
-        );
-        inserted++;
-      } catch (e) {
-        console.warn('[diff] insert failed:', (e as Error).message.slice(0, 120));
-      }
-    }
-
-    const byKind: Record<string, number> = {};
-    for (const m of mods) {
-      const k = String(m.kind || 'unknown');
-      byKind[k] = (byKind[k] || 0) + 1;
-    }
-    const summary = Object.entries(byKind)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([k, v]) => v + ' ' + k)
-      .join(', ');
-
-    return inserted + ' modifications (' + summary + ') in ' + (j.wall_ms || 0) + 'ms';
-  } catch (e) {
-    return 'diff error: ' + (e as Error).message.slice(0, 180);
-  }
-}
-
-async function phaseModBots(ctx: PhaseContext): Promise<string> {
-  // Classification pass over the modifications diff already wrote to the DB.
-  // For each MODIFIED dex we look up which classes changed. For each
-  // ADDED / REMOVED class the classification is already known.
-  // Nothing writes to disk here — this phase purely annotates.
-  const BACKEND = 'http://127.0.0.1:8792';
-
-  ctx.emit('modBots', 'start', 'classifying modifications');
-
-  try {
-    const mods = await pipelineStore.listModifications(ctx.job.id);
-    if (mods.length === 0) return 'nothing to classify';
-
-    const byKind: Record<string, number> = {};
-    for (const m of mods) byKind[m.kind] = (byKind[m.kind] || 0) + 1;
-
-    // For dex-level MODIFIED entries, ask the sidecar which classes are
-    // shared vs unique so the UI can show "this dex contains N classes
-    // that exist in both APKs". Not a per-method diff, but it narrows
-    // where to look next. Uses apk_dex_list for the class inventory.
-    const dexMods = mods.filter(m => m.kind === 'dex' && m.type === 'MODIFIED');
-    let annotated = 0;
-    for (const d of dexMods.slice(0, 3)) {
-      try {
-        const r = await fetch(BACKEND + '/tool/apk_batch_disassemble', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ apk_path: ctx.job.apkPath, dex: d.target, classes: [] }),
-        }).then(r => r.json());
-        if (r.ok) annotated++;
-      } catch { /* ignore — annotation is best-effort */ }
-    }
-
-    const summary = Object.entries(byKind)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([k, v]) => v + ' ' + k)
-      .join(', ');
-
-    return mods.length + ' classified (' + summary + ')' +
-      (annotated ? ' · ' + annotated + ' dex annotated' : '');
-  } catch (e) {
-    return 'modBots error: ' + (e as Error).message.slice(0, 180);
-  }
-}
-
 async function phaseBots(ctx: PhaseContext): Promise<string> {
   // Run the deterministic detector roster against the target APK.
   // Findings write into *this* pipeline job so the FINDINGS tab shows
@@ -666,54 +519,6 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   return 'review complete — ' + reverted + ' mod(s) marked';
 }
 
-async function phaseRevert(ctx: PhaseContext): Promise<string> {
-  const BACKEND = 'http://127.0.0.1:8792';
-  const originalApk = ctx.job.apkPath;
-  const modifiedApk = (ctx.job as any).modifiedApkPath;
-  if (!originalApk || !modifiedApk) return 'missing apk paths';
-
-  const reverted = await pipelineStore.listRevertedModifications(ctx.job.id);
-  if (reverted.length === 0) {
-    ctx.emit('revert', 'skipped', 'no items marked for revert');
-    return '0 items marked for revert — nothing to rebuild';
-  }
-
-  ctx.emit('revert', 'start', reverted.length + ' item(s) to revert');
-
-  const safeName = (ctx.job.apkName || ctx.job.id).replace(/[^A-Za-z0-9._-]/g, '_');
-  const outputPath = '/storage/emulated/0/Download/modkit-enhanced/' +
-    safeName + '-clean-' + Date.now() + '.apk';
-
-  try {
-    const r = await fetch(BACKEND + '/tool/apk_revert_run', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        original_apk: originalApk,
-        modified_apk: modifiedApk,
-        revert: reverted.map(m => ({
-          type: m.type, kind: m.kind, target: m.target,
-          parent_dex: m.parentDex,
-          original_hash: m.originalHash, modified_hash: m.modifiedHash,
-        })),
-        output_path: outputPath,
-      }),
-    });
-    const j: any = await r.json();
-    if (!j.ok) return 'revert failed: ' + (j.error || 'unknown');
-
-    await pipelineStore.setJobJson(ctx.job.id, 'plan', {
-      clean_apk: j.output,
-      clean_size: j.final_size,
-      reverted_dexes: j.reverted_dexes,
-      reverted_count: j.reverted_count,
-    });
-
-    return reverted.length + ' reverted → ' + j.output;
-  } catch (e) {
-    return 'revert error: ' + (e as Error).message.slice(0, 180);
-  }
-}
-
 async function phaseExport(ctx: PhaseContext): Promise<string> {
   ctx.emit('export', 'start', 'writing report');
 
@@ -732,7 +537,6 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
   lines.push('# modkit report');
   lines.push('');
   lines.push('- target: `' + (ctx.job.apkPath || '') + '`');
-  lines.push('- reference: `' + ((ctx.job as any).modifiedApkPath || '(none)') + '`');
   lines.push('- job id: `' + ctx.job.id + '`');
   lines.push('- generated: ' + new Date().toISOString());
   lines.push('');
@@ -847,18 +651,7 @@ export const pipelineRunner = {
 
     const ctx: PhaseContext = { job, emit, onStep: opts.onStep };
 
-    // Single-APK mode: no reference → skip every phase that only makes
-    // sense when comparing two APKs. The features/bots/nested phases
-    // work fine on one APK alone and are what the user actually cares
-    // about when analyzing a suspicious mod.
-    let phases = PHASES_ORDER.slice() as PhaseId[];
-    const hasReference = !!(job as any).modifiedApkPath;
-    if (!hasReference) {
-      const SKIP_NO_REF = new Set<PhaseId>([
-        'decompile' as any, 'diff' as any, 'modBots' as any, 'revert' as any,
-      ]);
-      phases = phases.filter(p => !SKIP_NO_REF.has(p));
-    }
+    const phases = PHASES_ORDER.slice() as PhaseId[];
     const stopAfterIdx = opts.stopAfter ? phases.indexOf(opts.stopAfter) : phases.length - 1;
 
     await pipelineStore.setJobState(jobId, 'queued');
@@ -880,14 +673,10 @@ export const pipelineRunner = {
       try {
         let summary: string;
         if (phase === 'import')           summary = await phaseImport(ctx);
-        else if (phase === 'decompile')   summary = await phaseDecompile(ctx);
-        else if (phase === 'diff')        summary = await phaseDiff(ctx);
-        else if (phase === 'modBots')     summary = await phaseModBots(ctx);
         else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'features')    summary = await phaseFeatures(ctx);
         else if (phase === 'nested')      summary = await phaseNested(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
-        else if (phase === 'revert')      summary = await phaseRevert(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);
         else                              summary = 'unknown phase: ' + phase;

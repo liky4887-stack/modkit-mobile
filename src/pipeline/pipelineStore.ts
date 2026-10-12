@@ -101,17 +101,15 @@ export interface UnitRecord {
 }
 
 export const PHASES_ORDER = [
-  // Deterministic chain — no LLM calls in the default path.
-  'import',       // load original + modified APK into sidecar
-  'decompile',    // disassemble classes*.dex to smali trees (both APKs)
-  'diff',         // enumerate every modification between the two APKs
-  'modBots',      // classify each modification (class / method / resource / permission / component / native)
-  'bots',         // 18-bot detector roster against the target APK (writes findings)
-  'features',     // feature-hunt scan + fingerprint on target APK (writes findings)
-  'nested',       // nested APK analysis — outer vs inner class delta (writes findings)
-  'review_gate',  // pause — user marks items to revert (or leave alone) in the review panel
-  'revert',       // produce a clean APK with the marked items restored to original bytes
-  'export',       // markdown report + modification inventory JSON + clean APK path
+  // Single-APK analysis chain. No reference APK, no diff, no revert —
+  // the tool is a mod detector, not a comparator. Every phase here
+  // works against one APK the user picked.
+  'import',       // load the target APK into the sidecar
+  'bots',         // 18-bot detector roster
+  'features',     // feature-hunt scan + fingerprint (Drebin + rules DB)
+  'nested',       // nested APK analysis — outer vs inner class delta
+  'review_gate',  // pause — show analysis result, user proceeds
+  'export',       // markdown report
   'audit',        // counts
 ] as const;
 

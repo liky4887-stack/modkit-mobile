@@ -16,13 +16,6 @@ import { apkPicker } from '@/upload/apkPicker';
 import { pipelineStore, JobRecord, type FindingRecord } from '@/pipeline/pipelineStore';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
 
-const DEFAULT_REFERENCE = '';  // empty = single-APK mode by default
-
-const TYPE_COLOR: Record<string, string> = {
-  ADDED: '#FF3B30',
-  REMOVED: '#FF9500',
-  MODIFIED: '#FFCC00',
-};
 
 const SEV_COLOR: Record<string, string> = {
   critical: '#FF3B30',
@@ -32,41 +25,16 @@ const SEV_COLOR: Record<string, string> = {
   info: '#8E8E93',
 };
 
-interface ModRow {
-  id: string;
-  type: string;
-  kind: string;
-  target: string;
-  parentDex: string | null;
-  original: string | null;
-  modified: string | null;
-  originalHash: string | null;
-  modifiedHash: string | null;
-  reverted: boolean;
-}
-
 export default function JobsTab() {
   const [targetPath, setTargetPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
-  const [referencePath, setReferencePath] = useState(DEFAULT_REFERENCE);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
-  const [mods, setMods] = useState<ModRow[]>([]);
   const [jobFindings, setJobFindings] = useState<FindingRecord[]>([]);
   const [preGate, setPreGate] = useState<any>(null);
   const [showFindings, setShowFindings] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
-  const [userInteracted, setUserInteracted] = useState(false);
-
-  const reloadMods = useCallback(async (jobId: string) => {
-    const ms = await pipelineStore.listModifications(jobId) as ModRow[];
-    setMods(ms);
-    setSelected(new Set());
-    setUserInteracted(false);
-  }, []);
 
   const loadJob = useCallback(async (jobId: string) => {
     const j = await pipelineStore.getJob(jobId);
@@ -80,12 +48,6 @@ export default function JobsTab() {
       .map((p: any) => p.phase + '=' + ((p.finishedAt - p.startedAt) / 1000).toFixed(1) + 's')
       .join(' ');
     setStatus((j.state || '?') + ' · ' + phases.length + ' phases' + (timing ? '\n' + timing : ''));
-    if (j.state === 'awaiting_user') {
-      await reloadMods(jobId);
-    } else {
-      setMods([]);
-      setSelected(new Set());
-    }
     // Findings from bots + features + nested phases. Live in this same job.
     try {
       const fs = await pipelineStore.listFindings(jobId);
@@ -101,7 +63,7 @@ export default function JobsTab() {
     } catch {
       setPreGate(null);
     }
-  }, [reloadMods]);
+  }, []);
 
   // Restore latest job on mount
   useEffect(() => {
@@ -126,13 +88,9 @@ export default function JobsTab() {
   const runPipeline = useCallback(async () => {
     if (running) return;
     if (!targetPath.trim()) { Alert.alert('No TARGET APK'); return; }
-    // REFERENCE is optional — leave empty for single-APK analysis.
 
     setRunning(true);
     setSteps([]);
-    setMods([]);
-    setSelected(new Set());
-    setUserInteracted(false);
     setStatus('creating job…');
 
     try {
@@ -144,9 +102,6 @@ export default function JobsTab() {
         apkSize: 0,
       });
       await pipelineStore.createPhasesForJob(job.id);
-      if (referencePath.trim()) {
-        await pipelineStore.setModifiedApkPath(job.id, referencePath.trim());
-      }
 
       const startedAt = Date.now();
       const result = await pipelineRunner.run(job.id, {
@@ -167,36 +122,15 @@ export default function JobsTab() {
       setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
     }
     setRunning(false);
-  }, [running, targetPath, referencePath, loadJob]);
+  }, [running, targetPath, loadJob]);
 
-  const toggle = useCallback(async (id: string) => {
-    setUserInteracted(true);
-    const next = !selected.has(id);
-    const s = new Set(selected);
-    if (next) s.add(id); else s.delete(id);
-    setSelected(s);
-    await pipelineStore.setModificationReverted(id, next);
-  }, [selected]);
-
-  const toggleAll = useCallback(async (group: ModRow[], on: boolean) => {
-    setUserInteracted(true);
-    const s = new Set(selected);
-    for (const m of group) {
-      if (on) s.add(m.id); else s.delete(m.id);
-      await pipelineStore.setModificationReverted(m.id, on);
-    }
-    setSelected(s);
-  }, [selected]);
-
-  const decideAndResume = useCallback(async () => {
+  const proceedFromGate = useCallback(async () => {
     if (!currentJob || busy) return;
-    // selected.size can be 0 — user is accepting the analysis and
-    // proceeding to export/audit without reverting anything.
     setBusy(true);
     try {
       await pipelineStore.setReviewState(currentJob.id, 'decided');
-      setStatus('running revert → export → audit…');
-      const r = await pipelineRunner.run(currentJob.id, { fromPhase: 'revert' as any });
+      setStatus('running export → audit…');
+      const r = await pipelineRunner.run(currentJob.id, { fromPhase: 'export' as any });
       setStatus(r.finalState + ' · ' + r.outcomes.length + ' phases · ' +
         (r.finishedAt - r.startedAt) + 'ms');
       await loadJob(currentJob.id);
@@ -204,17 +138,7 @@ export default function JobsTab() {
       setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
     }
     setBusy(false);
-  }, [currentJob, busy, selected, loadJob]);
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, ModRow[]>();
-    for (const m of mods) {
-      const key = m.parentDex || ('[' + m.kind + ']');
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(m);
-    }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [mods]);
+  }, [currentJob, busy, loadJob]);
 
   const phaseState = currentJob?.state;
   const showReview = phaseState === 'awaiting_user';
@@ -239,34 +163,29 @@ export default function JobsTab() {
 
         {/* RUN PIPELINE */}
         <View style={styles.block}>
-          <Text style={styles.blockLabel}>RUN PIPELINE</Text>
+          <Text style={styles.blockLabel}>RUN ANALYSIS</Text>
           <Text style={styles.help}>
-            Deterministic chain: import → decompile → diff → modBots →
-            review_gate → revert → export → audit. Zero LLM calls.
+            import → bots → features → nested → review → export → audit
           </Text>
 
           <Text style={[styles.miniLabel, { marginTop: 10 }]}>TARGET APK</Text>
-          <Text style={styles.pathText} numberOfLines={2}>{targetPath}</Text>
-
-          <Text style={[styles.miniLabel, { marginTop: 10 }]}>REFERENCE APK URL</Text>
           <TextInput
-            value={referencePath}
-            onChangeText={setReferencePath}
+            value={targetPath}
+            onChangeText={setTargetPath}
             style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}
             editable={!running}
-            placeholder="/data/data/.../fixtures/pubg-modded.apk"
+            placeholder="/storage/emulated/0/.../your.apk"
             placeholderTextColor={colors.textTertiary}
           />
-          <Text style={[styles.help, {
-            color: referencePath.trim() ? colors.accent : colors.danger,
-            marginTop: 4,
-          }]}>
-            {referencePath.trim()
-              ? 'REFERENCE SET · READY'
-              : 'REFERENCE EMPTY — paste a path'}
-          </Text>
+
+          <Pressable
+            onPress={pickTarget}
+            style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }]}
+          >
+            <Text style={styles.miniText}>PICK FROM FILES</Text>
+          </Pressable>
 
           <Pressable
             onPress={runPipeline}
@@ -274,11 +193,7 @@ export default function JobsTab() {
             style={[styles.primaryBtn, { marginTop: 12 }, running && styles.btnDisabled]}
           >
             <Text style={styles.primaryBtnText}>
-              {running
-                ? 'PIPELINE RUNNING…'
-                : referencePath.trim()
-                  ? 'RUN PIPELINE · TARGET vs REFERENCE'
-                  : 'RUN PIPELINE · SINGLE APK'}
+              {running ? 'ANALYSING…' : 'RUN ANALYSIS'}
             </Text>
           </Pressable>
 
@@ -299,149 +214,65 @@ export default function JobsTab() {
           </View>
         )}
 
-        {/* INLINE REVIEW — appears when paused */}
-        {showReview && (
-          <>
-            {/* Aggregate of every pre-gate phase. This is the whole
-                picture the user reviews against: diff mods, bot
-                detections, feature hits, nested-wrapper delta. */}
-            {preGate && (
-              <View style={styles.block}>
-                <Text style={styles.blockLabel}>ANALYSIS RESULT</Text>
+        {/* ANALYSIS RESULT — what the scanner found */}
+        {showReview && preGate && (
+          <View style={styles.block}>
+            <Text style={styles.blockLabel}>ANALYSIS RESULT</Text>
 
-                {/* ── Mod signals — the answer ─────────────────── */}
-                {(preGate.mod_signals && preGate.mod_signals.length > 0) ? (
-                  <>
-                    <Text style={[styles.help, { color: colors.accent, fontSize: 13, marginBottom: 8 }]}>
-                      {'⚠ ' + preGate.mod_signals.length +
-                       ' MOD SIGNAL' + (preGate.mod_signals.length === 1 ? '' : 'S')}
-                    </Text>
-                    {preGate.mod_signals.map((m: any, i: number) => (
-                      <View key={i} style={styles.findingRow}>
-                        <View style={[styles.sevPill, { backgroundColor: '#FF3B30' }]}>
-                          <Text style={styles.sevPillText}>MOD</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.findingTitle}>{m.title}</Text>
-                          <Text style={styles.findingMeta}>
-                            {(m.category || '?') + ' · ' +
-                             (m.confidence != null ? m.confidence.toFixed(2) : '?')}
-                          </Text>
-                        </View>
-                      </View>
-                    ))}
-                  </>
-                ) : (
-                  <Text style={[styles.help, { color: '#34C759' }]}>
-                    ✓ No mod signals detected (0 mod_artifacts in this APK)
-                  </Text>
-                )}
-
-                {/* ── Context signals ─────────────────────────── */}
-                {(preGate.defense_signals?.length || 0) +
-                 (preGate.framework_signals?.length || 0) +
-                 (preGate.nested_signals?.length || 0) > 0 && (
-                  <Text style={[styles.help, { marginTop: 10 }]}>
-                    {'context: ' +
-                     (preGate.defense_signals?.length || 0) + ' defense · ' +
-                     (preGate.framework_signals?.length || 0) + ' framework · ' +
-                     (preGate.nested_signals?.length || 0) + ' nested'}
-                  </Text>
-                )}
-
-                {/* ── SDK roster footer ──────────────────────── */}
-                {preGate.sdk_findings_count > 0 && (
-                  <Text style={[styles.help, { marginTop: 6, opacity: 0.6 }]}>
-                    {preGate.sdk_findings_count + ' SDK/bot observations (see FINDINGS)'}
-                  </Text>
-                )}
-              </View>
-            )}
-
-            <View style={styles.block}>
-            <Text style={styles.blockLabel}>
-              {'REVIEW · ' + mods.length + ' MODIFICATION' + (mods.length === 1 ? '' : 'S')}
-            </Text>
-            {mods.length === 0 && (
-              <Text style={styles.help}>
-                No modifications to review. The diff phase found nothing — usually
-                because the reference is byte-identical to the target.
+            {(preGate.mod_signals && preGate.mod_signals.length > 0) ? (
+              <>
+                <Text style={[styles.help, { color: colors.accent, fontSize: 13, marginBottom: 8 }]}>
+                  {'⚠ ' + preGate.mod_signals.length +
+                   ' MOD SIGNAL' + (preGate.mod_signals.length === 1 ? '' : 'S')}
+                </Text>
+                {preGate.mod_signals.map((m: any, i: number) => (
+                  <View key={i} style={styles.findingRow}>
+                    <View style={[styles.sevPill, { backgroundColor: '#FF3B30' }]}>
+                      <Text style={styles.sevPillText}>MOD</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.findingTitle}>{m.title}</Text>
+                      <Text style={styles.findingMeta}>
+                        {(m.category || '?') + ' · ' +
+                         (m.confidence != null ? m.confidence.toFixed(2) : '?')}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : (
+              <Text style={[styles.help, { color: '#34C759' }]}>
+                ✓ No mod signals detected (0 mod_artifacts in this APK)
               </Text>
             )}
-            {mods.length > 0 && (
-              <>
-                <Text style={styles.help}>
-                  {selected.size} marked for revert. Grouped by parent dex.
-                </Text>
-                {grouped.map(([key, group]) => {
-                  const open = expanded[key] !== false;
-                  const groupSel = group.filter(m => selected.has(m.id)).length;
-                  return (
-                    <View key={key} style={styles.group}>
-                      <Pressable
-                        onPress={() => setExpanded(e => ({ ...e, [key]: !(e[key] !== false) }))}
-                        style={styles.groupHeader}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.groupTitle} numberOfLines={1}>{key}</Text>
-                          <Text style={styles.groupMeta}>
-                            {group.length + ' item' + (group.length === 1 ? '' : 's') +
-                             ' · ' + groupSel + ' selected'}
-                          </Text>
-                        </View>
-                        <Text style={styles.groupChevron}>{open ? '▾' : '▸'}</Text>
-                      </Pressable>
-                      <View style={styles.groupActions}>
-                        <Pressable onPress={() => toggleAll(group, true)} style={[styles.miniBtn, styles.miniOn]}>
-                          <Text style={styles.miniTextOn}>ALL</Text>
-                        </Pressable>
-                        <Pressable onPress={() => toggleAll(group, false)} style={styles.miniBtn}>
-                          <Text style={styles.miniText}>NONE</Text>
-                        </Pressable>
-                      </View>
-                      {open && group.map(m => {
-                        const on = selected.has(m.id);
-                        const tone = TYPE_COLOR[m.type] || '#8E8E93';
-                        return (
-                          <Pressable key={m.id} onPress={() => toggle(m.id)}
-                            style={[styles.modRow, on && styles.modRowOn]}>
-                            <View style={[styles.checkbox, on && styles.checkboxOn]}>
-                              {on && <Text style={styles.checkMark}>✓</Text>}
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <View style={styles.modTop}>
-                                <View style={[styles.pill, { backgroundColor: tone }]}>
-                                  <Text style={styles.pillText}>{m.type}</Text>
-                                </View>
-                                <Text style={styles.kindText}>{m.kind}</Text>
-                              </View>
-                              <Text style={styles.targetText} numberOfLines={2}>{m.target}</Text>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  );
-                })}
 
-                <Pressable
-                  onPress={decideAndResume}
-                  disabled={busy}
-                  style={[styles.decideBtn, busy && styles.btnDisabled]}
-                >
-                  <Text style={styles.decideText}>
-                    {busy
-                      ? 'RESUMING…'
-                      : selected.size > 0
-                        ? 'DECIDE + RESUME · ' + selected.size + ' reverted'
-                        : 'PROCEED · ACCEPT ANALYSIS'
-                    }
-                  </Text>
-                </Pressable>
-              </>
+            {((preGate.defense_signals?.length || 0) +
+              (preGate.framework_signals?.length || 0) +
+              (preGate.nested_signals?.length || 0)) > 0 && (
+              <Text style={[styles.help, { marginTop: 10 }]}>
+                {'context: ' +
+                 (preGate.defense_signals?.length || 0) + ' defense · ' +
+                 (preGate.framework_signals?.length || 0) + ' framework · ' +
+                 (preGate.nested_signals?.length || 0) + ' nested'}
+              </Text>
             )}
-            </View>
-          </>
+
+            {preGate.sdk_findings_count > 0 && (
+              <Text style={[styles.help, { marginTop: 6, opacity: 0.6 }]}>
+                {preGate.sdk_findings_count + ' SDK/bot observations (see FINDINGS)'}
+              </Text>
+            )}
+
+            <Pressable
+              onPress={proceedFromGate}
+              disabled={busy}
+              style={[styles.decideBtn, busy && styles.btnDisabled]}
+            >
+              <Text style={styles.decideText}>
+                {busy ? 'EXPORTING…' : 'PROCEED · EXPORT REPORT'}
+              </Text>
+            </Pressable>
+          </View>
         )}
 
         {/* FINDINGS — bot + feature hits for THIS job */}
