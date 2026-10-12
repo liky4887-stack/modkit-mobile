@@ -107,14 +107,10 @@ async function syncJobToBackend(jobId: string): Promise<void> {
 
 async function acquireWakeLock(reason: string): Promise<boolean> {
   try {
-    const r = await guardFetch('http://127.0.0.1:8792/executeCommand', {
+    const r = await guardFetch('http://127.0.0.1:8792/tool/wake_lock', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        command: 'termux-wake-lock',
-        args: [],
-        timeoutMs: 5000,
-      }),
+      body: JSON.stringify({ action: 'lock' }),
     }).then(x => x.json());
     return r.ok === true;
   } catch {
@@ -124,14 +120,10 @@ async function acquireWakeLock(reason: string): Promise<boolean> {
 
 async function releaseWakeLock(): Promise<void> {
   try {
-    await guardFetch('http://127.0.0.1:8792/executeCommand', {
+    await guardFetch('http://127.0.0.1:8792/tool/wake_lock', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        command: 'termux-wake-unlock',
-        args: [],
-        timeoutMs: 5000,
-      }),
+      body: JSON.stringify({ action: 'unlock' }),
     });
   } catch {}
 }
