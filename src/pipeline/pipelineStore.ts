@@ -356,7 +356,10 @@ export const pipelineStore = {
     );
   },
 
-  async createStandaloneBotsJob(apkPath: string): Promise<string> {
+  async createStandaloneBotsJob(
+    apkPath: string,
+    source: string = 'standalone-bots',
+  ): Promise<string> {
     const db = await getDb();
     const id = uuid();
     const now = Date.now();
@@ -365,7 +368,7 @@ export const pipelineStore = {
       `INSERT INTO pipeline_jobs
        (id, scan_id, apk_path, apk_name, state, started_at, updated_at)
        VALUES (?,?,?,?,?,?,?)`,
-      [id, 'standalone-bots', apkPath, apkName, 'running', now, now],
+      [id, source, apkPath, apkName, 'running', now, now],
     );
     return id;
   },

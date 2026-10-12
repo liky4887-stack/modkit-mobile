@@ -11,6 +11,7 @@ import {
   type JobRecord,
 } from '@/pipeline/pipelineStore';
 import { runStandaloneBots } from '@/pipeline/standaloneBots';
+import { runFeatureHunt } from '@/pipeline/featureHunt';
 import { exportReport } from '@/utils/botsReport';
 import * as Sharing from 'expo-sharing';
 
@@ -47,6 +48,8 @@ export default function FindingsTab() {
   const [apkPath, setApkPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
   const [runBusy, setRunBusy] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [fhBusy, setFhBusy] = useState(false);
+  const [fhStatus, setFhStatus] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
 
@@ -93,6 +96,27 @@ export default function FindingsTab() {
       setRunBusy(false);
     }
   }, [runBusy, apkPath, load]);
+
+  const runFeature = useCallback(async () => {
+    if (fhBusy || !apkPath.trim()) return;
+    setFhBusy(true);
+    setFhStatus('scanning dex pools + native libs (~1 min)…');
+    try {
+      const r = await runFeatureHunt(apkPath.trim());
+      setFhStatus(
+        r.findingsCount + ' findings · ' +
+        r.modArtifacts + ' mod / ' + r.antiTamper + ' anti-tamper / ' +
+        r.frameworkMarkers + ' framework · ' +
+        (r.wallMs / 1000).toFixed(1) + 's · ' +
+        r.dexScanned + ' dex / ' + r.libsScanned + ' libs'
+      );
+      await load(r.jobId);
+    } catch (e) {
+      setFhStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)).slice(0, 180));
+    } finally {
+      setFhBusy(false);
+    }
+  }, [fhBusy, apkPath, load]);
 
   const decide = useCallback(async (id: string, state: 'approved' | 'rejected') => {
     setBusy(id);
@@ -164,6 +188,30 @@ export default function FindingsTab() {
             numberOfLines={2}
           >
             {runStatus}
+          </Text>
+        )}
+        <Pressable
+          onPress={runFeature}
+          disabled={fhBusy || !apkPath.trim()}
+          style={[
+            styles.runBtn,
+            { marginTop: 6, backgroundColor: '#2A1A3A' },
+            (fhBusy || !apkPath.trim()) && styles.runBtnDisabled,
+          ]}
+        >
+          <Text style={[styles.runBtnText, { color: '#BF5AF2' }]}>
+            {fhBusy ? 'SCANNING (~1 min)…' : 'RUN FEATURE SCAN'}
+          </Text>
+        </Pressable>
+        {fhStatus && (
+          <Text
+            style={[
+              styles.runStatus,
+              { color: fhStatus.startsWith('FAIL') ? '#FF3B30' : '#BF5AF2' },
+            ]}
+            numberOfLines={3}
+          >
+            {fhStatus}
           </Text>
         )}
         <Pressable
