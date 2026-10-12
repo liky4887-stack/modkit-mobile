@@ -59,8 +59,46 @@ function featureHitToRow(h: any, cls: string): NewFinding {
   };
 }
 
+function featureHitFromFleet(h: any): NewFinding {
+  const cls = h.finding_class || 'mod_artifact';
+  const conf = typeof h.confidence === 'number' ? h.confidence : 0.5;
+  const ev = (h.evidence || [])
+    .slice(0, 3)
+    .map((e: any) => `${e.pattern || '?'} → ${(e.matched || '').slice(0, 80)}`)
+    .join(' · ');
+  return {
+    unitId: null,
+    severity: h.severity || (cls !== 'mod_artifact' ? 'info'
+              : conf >= 0.9 ? 'critical'
+              : conf >= 0.7 ? 'high'
+              : conf >= 0.5 ? 'medium'
+              : conf >= 0.3 ? 'low' : 'info'),
+    category: h.category || 'feature-hunt',
+    title: h.feature_name || h.feature_id || 'feature',
+    risk: h.risk || h.notes || '',
+    evidenceClass: h.feature_id || null,
+    evidenceMethod: ev || null,
+    evidenceSource: `feature_hunt:${cls}:${h.source || 'dex'}`,
+    patch: {},
+    verification: null,
+    confidence: conf,
+    confidenceBand: conf >= 0.9 ? 'high' : conf >= 0.7 ? 'medium' : 'low',
+  };
+}
+
 export function featureReportToRows(report: any): NewFinding[] {
   const rows: NewFinding[] = [];
+  const hasFleetShape = report
+    && Array.isArray(report.hits)
+    && (Array.isArray(report.mod_artifacts)
+        || Array.isArray(report.anti_tamper_surface)
+        || Array.isArray(report.framework_markers));
+  if (hasFleetShape) {
+    for (const h of (report.mod_artifacts       || [])) rows.push(featureHitFromFleet(h));
+    for (const h of (report.anti_tamper_surface || [])) rows.push(featureHitFromFleet(h));
+    for (const h of (report.framework_markers   || [])) rows.push(featureHitFromFleet(h));
+    return rows;
+  }
   for (const h of report.mod_artifacts       || []) rows.push(featureHitToRow(h, 'mod_artifact'));
   for (const h of report.anti_tamper_surface || []) rows.push(featureHitToRow(h, 'anti_tamper_surface'));
   for (const h of report.framework_markers   || []) rows.push(featureHitToRow(h, 'framework_marker'));
