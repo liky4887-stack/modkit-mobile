@@ -13,7 +13,7 @@ import {
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
-import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
+import { pipelineStore, JobRecord, type FindingRecord } from '@/pipeline/pipelineStore';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
 
 const DEFAULT_REFERENCE = '/data/data/com.termux/files/home/fixtures/pubg-method-edit.apk';
@@ -22,6 +22,14 @@ const TYPE_COLOR: Record<string, string> = {
   ADDED: '#FF3B30',
   REMOVED: '#FF9500',
   MODIFIED: '#FFCC00',
+};
+
+const SEV_COLOR: Record<string, string> = {
+  critical: '#FF3B30',
+  high: '#FF9500',
+  medium: '#FFCC00',
+  low: '#34C759',
+  info: '#8E8E93',
 };
 
 interface ModRow {
@@ -45,6 +53,8 @@ export default function JobsTab() {
   const [status, setStatus] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [mods, setMods] = useState<ModRow[]>([]);
+  const [jobFindings, setJobFindings] = useState<FindingRecord[]>([]);
+  const [showFindings, setShowFindings] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
@@ -74,6 +84,13 @@ export default function JobsTab() {
     } else {
       setMods([]);
       setSelected(new Set());
+    }
+    // Findings from bots + features phases. Live in this same job.
+    try {
+      const fs = await pipelineStore.listFindings(jobId);
+      setJobFindings(fs);
+    } catch {
+      setJobFindings([]);
     }
   }, [reloadMods]);
 
@@ -350,6 +367,82 @@ export default function JobsTab() {
           </View>
         )}
 
+        {/* FINDINGS — bot + feature hits for THIS job */}
+        {jobFindings.length > 0 && (() => {
+          const bySev: Record<string, number> = {};
+          const bySource: Record<string, number> = { bot: 0, feature: 0 };
+          for (const f of jobFindings) {
+            bySev[f.severity] = (bySev[f.severity] || 0) + 1;
+            const src = (f.evidenceSource || '');
+            // feature_hunt writes 'feature_hunt:<class>:<src>';
+            // everything else in this job is a bot finding.
+            if (src.startsWith('feature_hunt')) bySource.feature++;
+            else                                bySource.bot++;
+          }
+          const sevOrder = ['critical', 'high', 'medium', 'low', 'info'];
+          return (
+            <View style={styles.block}>
+              <Text style={styles.blockLabel}>
+                {'FINDINGS · ' + jobFindings.length}
+              </Text>
+              <Text style={styles.help}>
+                {'bot: ' + bySource.bot + ' · feature: ' + bySource.feature}
+              </Text>
+              <View style={styles.grid}>
+                {sevOrder.map(sev => (
+                  <View key={sev} style={styles.gridCell}>
+                    <Text style={[styles.gridNum, { color: SEV_COLOR[sev] }]}>
+                      {bySev[sev] || 0}
+                    </Text>
+                    <Text style={styles.gridLabel}>{sev}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <Pressable
+                onPress={() => setShowFindings(v => !v)}
+                style={[styles.miniBtn, { marginTop: 10, alignSelf: 'flex-start' }]}
+              >
+                <Text style={styles.miniText}>
+                  {showFindings ? 'HIDE LIST' : 'SHOW LIST (' + jobFindings.length + ')'}
+                </Text>
+              </Pressable>
+
+              {showFindings && (
+                <View style={{ marginTop: 8 }}>
+                  {jobFindings.slice(0, 60).map(f => {
+                    const src = (f.evidenceSource || '');
+                    const tag = src.startsWith('feature_hunt') ? 'FEAT'
+                              : src.startsWith('bot')          ? 'BOT'
+                              : 'OTH';
+                    return (
+                      <View key={f.id} style={styles.findingRow}>
+                        <View style={[styles.sevPill, { backgroundColor: SEV_COLOR[f.severity] || '#8E8E93' }]}>
+                          <Text style={styles.sevPillText}>{f.severity.slice(0, 4).toUpperCase()}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.findingTitle} numberOfLines={2}>
+                            {f.title}
+                          </Text>
+                          <Text style={styles.findingMeta}>
+                            {tag + ' · ' + f.category +
+                             (f.confidenceBand ? ' · ' + f.confidenceBand : '')}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                  {jobFindings.length > 60 && (
+                    <Text style={styles.help}>
+                      {'…' + (jobFindings.length - 60) + ' more — see FINDINGS tab'}
+                    </Text>
+                  )}
+                </View>
+              )}
+            </View>
+          );
+        })()}
+
         {/* Recent jobs */}
         <View style={styles.block}>
           <Text style={styles.blockLabel}>RECENT</Text>
@@ -427,6 +520,17 @@ const styles = StyleSheet.create({
 
   decideBtn: { marginTop: 12, backgroundColor: colors.accent, borderRadius: 6, paddingVertical: 14, alignItems: 'center' },
   decideText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 1 },
+
+  grid: { flexDirection: 'row', marginTop: 8 },
+  gridCell: { flex: 1, alignItems: 'center' },
+  gridNum: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 16 },
+  gridLabel: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 8, letterSpacing: 1, marginTop: 2 },
+
+  findingRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
+  sevPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3, marginTop: 2 },
+  sevPillText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 8, letterSpacing: 0.5 },
+  findingTitle: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, lineHeight: 15 },
+  findingMeta: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 2 },
 
   jobRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
   jobName: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, flex: 1 },
