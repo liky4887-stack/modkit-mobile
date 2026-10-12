@@ -74,3 +74,6 @@ src_files.txt
 server.js
 .reports/
 scripts/
+*.pre_*
+*.pre-*
+**/*.pre_*
