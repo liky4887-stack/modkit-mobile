@@ -189,11 +189,18 @@ export default function JobsTab() {
 
           <Pressable
             onPress={runPipeline}
-            disabled={running}
-            style={[styles.primaryBtn, { marginTop: 12 }, running && styles.btnDisabled]}
+            disabled={running || (currentJob?.state === 'awaiting_user')}
+            style={[
+              styles.primaryBtn, { marginTop: 12 },
+              (running || currentJob?.state === 'awaiting_user') && styles.btnDisabled,
+            ]}
           >
             <Text style={styles.primaryBtnText}>
-              {running ? 'ANALYSING…' : 'RUN ANALYSIS'}
+              {running
+                ? 'ANALYSING…'
+                : currentJob?.state === 'awaiting_user'
+                  ? 'PAUSED — RESOLVE ANALYSIS BELOW'
+                  : 'RUN ANALYSIS'}
             </Text>
           </Pressable>
 
@@ -214,52 +221,123 @@ export default function JobsTab() {
           </View>
         )}
 
-        {/* ANALYSIS RESULT — what the scanner found */}
+        {/* ANALYSIS RESULT — every signal, inline */}
         {showReview && preGate && (
           <View style={styles.block}>
             <Text style={styles.blockLabel}>ANALYSIS RESULT</Text>
 
+            {/* ── Mod signals — real findings, full detail ──────── */}
             {(preGate.mod_signals && preGate.mod_signals.length > 0) ? (
               <>
-                <Text style={[styles.help, { color: colors.accent, fontSize: 13, marginBottom: 8 }]}>
+                <Text style={styles.alertHeader}>
                   {'⚠ ' + preGate.mod_signals.length +
                    ' MOD SIGNAL' + (preGate.mod_signals.length === 1 ? '' : 'S')}
                 </Text>
                 {preGate.mod_signals.map((m: any, i: number) => (
-                  <View key={i} style={styles.findingRow}>
-                    <View style={[styles.sevPill, { backgroundColor: '#FF3B30' }]}>
-                      <Text style={styles.sevPillText}>MOD</Text>
+                  <View key={i} style={styles.signalCard}>
+                    <View style={styles.signalTop}>
+                      <View style={[styles.sevPill, { backgroundColor: '#FF3B30' }]}>
+                        <Text style={styles.sevPillText}>MOD</Text>
+                      </View>
+                      <Text style={styles.signalCategory}>
+                        {(m.category || '?').toUpperCase()}
+                      </Text>
+                      <Text style={styles.signalConf}>
+                        {m.confidence != null ? m.confidence.toFixed(2) : '?'}
+                      </Text>
+                    </View>
+                    <Text style={styles.signalTitle}>{m.title}</Text>
+                    {m.evidence_method && (
+                      <Text style={styles.signalEvidence} numberOfLines={3}>
+                        {m.evidence_method}
+                      </Text>
+                    )}
+                    {m.risk && (
+                      <Text style={styles.signalRisk}>{m.risk}</Text>
+                    )}
+                  </View>
+                ))}
+              </>
+            ) : (
+              <Text style={styles.cleanBanner}>
+                ✓ No mod code detected in this APK
+              </Text>
+            )}
+
+            {/* ── Anti-tamper surface — what the target defends ── */}
+            {(preGate.defense_signals && preGate.defense_signals.length > 0) && (
+              <>
+                <Text style={styles.sectionHeader}>
+                  {'ANTI-TAMPER SURFACE · ' + preGate.defense_signals.length}
+                </Text>
+                {preGate.defense_signals.map((d: any, i: number) => (
+                  <View key={i} style={styles.signalRow}>
+                    <View style={[styles.sevPill, { backgroundColor: '#8E8E93' }]}>
+                      <Text style={styles.sevPillText}>DEF</Text>
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.findingTitle}>{m.title}</Text>
-                      <Text style={styles.findingMeta}>
-                        {(m.category || '?') + ' · ' +
-                         (m.confidence != null ? m.confidence.toFixed(2) : '?')}
+                      <Text style={styles.signalTitle}>{d.title}</Text>
+                      <Text style={styles.signalMeta}>
+                        {(d.category || '?') + ' · ' +
+                         (d.confidence != null ? d.confidence.toFixed(2) : '?')}
                       </Text>
                     </View>
                   </View>
                 ))}
               </>
-            ) : (
-              <Text style={[styles.help, { color: '#34C759' }]}>
-                ✓ No mod signals detected (0 mod_artifacts in this APK)
-              </Text>
             )}
 
-            {((preGate.defense_signals?.length || 0) +
-              (preGate.framework_signals?.length || 0) +
-              (preGate.nested_signals?.length || 0)) > 0 && (
-              <Text style={[styles.help, { marginTop: 10 }]}>
-                {'context: ' +
-                 (preGate.defense_signals?.length || 0) + ' defense · ' +
-                 (preGate.framework_signals?.length || 0) + ' framework · ' +
-                 (preGate.nested_signals?.length || 0) + ' nested'}
-              </Text>
+            {/* ── Framework markers ───────────────────────────── */}
+            {(preGate.framework_signals && preGate.framework_signals.length > 0) && (
+              <>
+                <Text style={styles.sectionHeader}>
+                  {'FRAMEWORK MARKERS · ' + preGate.framework_signals.length}
+                </Text>
+                {preGate.framework_signals.map((f: any, i: number) => (
+                  <View key={i} style={styles.signalRow}>
+                    <View style={[styles.sevPill, { backgroundColor: '#5AC8FA' }]}>
+                      <Text style={styles.sevPillText}>FW</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.signalTitle}>{f.title}</Text>
+                      <Text style={styles.signalMeta}>
+                        {(f.category || '?') + ' · ' +
+                         (f.confidence != null ? f.confidence.toFixed(2) : '?')}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </>
             )}
 
+            {/* ── Nested container ─────────────────────────────── */}
+            {(preGate.nested_signals && preGate.nested_signals.length > 0) && (
+              <>
+                <Text style={styles.sectionHeader}>
+                  {'NESTED CONTAINER · ' + preGate.nested_signals.length}
+                </Text>
+                {preGate.nested_signals.map((n: any, i: number) => (
+                  <View key={i} style={styles.signalRow}>
+                    <View style={[styles.sevPill, { backgroundColor: '#FF9500' }]}>
+                      <Text style={styles.sevPillText}>NEST</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.signalTitle}>{n.title}</Text>
+                      {n.risk && (
+                        <Text style={styles.signalMeta} numberOfLines={2}>{n.risk}</Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </>
+            )}
+
+            {/* ── SDK roster footer ────────────────────────────── */}
             {preGate.sdk_findings_count > 0 && (
-              <Text style={[styles.help, { marginTop: 6, opacity: 0.6 }]}>
-                {preGate.sdk_findings_count + ' SDK/bot observations (see FINDINGS)'}
+              <Text style={styles.sdkFooter}>
+                {preGate.sdk_findings_count + ' SDK / bot observation' +
+                 (preGate.sdk_findings_count === 1 ? '' : 's') +
+                 ' — tap FINDINGS below for the full list'}
               </Text>
             )}
 
@@ -444,4 +522,18 @@ const styles = StyleSheet.create({
   jobRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
   jobName: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, flex: 1 },
   jobState: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginLeft: 8 },
+
+  alertHeader: { color: '#FF3B30', fontFamily: 'Inter-SemiBold', fontSize: 13, marginBottom: 10, letterSpacing: 1 },
+  cleanBanner: { color: '#34C759', fontFamily: 'Inter-Regular', fontSize: 12, marginBottom: 4 },
+  sectionHeader: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10, letterSpacing: 2, marginTop: 16, marginBottom: 8 },
+  signalCard: { backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1, borderColor: colors.border, padding: 10, marginBottom: 8 },
+  signalTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  signalCategory: { color: colors.textTertiary, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1, flex: 1 },
+  signalConf: { color: colors.accent, fontFamily: 'JetBrainsMono-Regular', fontSize: 10 },
+  signalRisk: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, lineHeight: 14, marginTop: 4, opacity: 0.8 },
+  signalTitle: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 12, lineHeight: 16 },
+  signalMeta: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 2 },
+  signalEvidence: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 4, opacity: 0.75 },
+  signalRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
+  sdkFooter: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginTop: 14, opacity: 0.7 },
 });
