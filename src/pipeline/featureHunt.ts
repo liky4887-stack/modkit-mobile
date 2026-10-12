@@ -90,34 +90,8 @@ export async function runFeatureHunt(apkPath: string): Promise<FeatureHuntResult
     const fw = j.framework_markers || [];
     const fp = j.fingerprint || {};
 
-    const findings: NewFinding[] = [];
-    for (const h of mod)  findings.push(hitToFinding(h, 'mod_artifact'));
-    for (const h of anti) findings.push(hitToFinding(h, 'anti_tamper_surface'));
-    for (const h of fw)   findings.push(hitToFinding(h, 'framework_marker'));
-
-    // Surface the fingerprint as its own finding when anything notable
-    // is present — packer and obfuscator are the ones worth a row.
-    const notableFp: string[] = [
-      ...((fp.packer || []) as string[]).map(p => `packer: ${p}`),
-      ...((fp.obfuscator || []) as string[]).map(o => `obfuscator: ${o}`),
-    ];
-    if (notableFp.length > 0) {
-      findings.push({
-        unitId: null,
-        severity: 'info',
-        category: 'fingerprint',
-        title: 'APK protection fingerprint',
-        risk: notableFp.join(' · '),
-        evidenceClass: null,
-        evidenceMethod: null,
-        evidenceSource: 'feature_hunt:fingerprint',
-        patch: {},
-        verification: null,
-        confidence: 0.9,
-        confidenceBand: 'high',
-      });
-    }
-
+    const { featureReportToRows } = await import('./findingAdapters');
+    const findings = featureReportToRows(j);
     await pipelineStore.createFindings(jobId, findings);
     await pipelineStore.setJobState(jobId, 'done');
 

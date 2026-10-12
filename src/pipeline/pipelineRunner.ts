@@ -486,6 +486,55 @@ async function phaseModBots(ctx: PhaseContext): Promise<string> {
   }
 }
 
+async function phaseBots(ctx: PhaseContext): Promise<string> {
+  // Run the deterministic detector roster against the target APK.
+  // Findings write into *this* pipeline job so the FINDINGS tab shows
+  // them alongside diff modifications and feature hits.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('bots', 'start', 'running detector roster');
+  try {
+    const r = await fetch(BACKEND + '/tool/bots_run_manager', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'bots failed: ' + (j.error || 'unknown');
+    const { botFindingsToRows } = await import('./findingAdapters');
+    const rows = botFindingsToRows(j.findings || []);
+    const n = await pipelineStore.createFindings(ctx.job.id, rows);
+    const rejected = (j.shadow_rejections || []).length;
+    return n + ' findings in ' + (j.wall_ms || 0) + 'ms' +
+      (rejected ? ' · ' + rejected + ' shadow-rejected' : '');
+  } catch (e) {
+    return 'bots error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
+async function phaseFeatures(ctx: PhaseContext): Promise<string> {
+  // Feature-hunt scan + fingerprint on the target APK. Same job, same
+  // findings table — one FINDINGS list per pipeline run.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('features', 'start', 'scanning dex + native libs (~1 min)');
+  try {
+    const r = await fetch(BACKEND + '/tool/apk_feature_full', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'feature scan failed: ' + (j.error || 'unknown');
+    const { featureReportToRows } = await import('./findingAdapters');
+    const rows = featureReportToRows(j);
+    const n = await pipelineStore.createFindings(ctx.job.id, rows);
+    const mod  = (j.mod_artifacts       || []).length;
+    const anti = (j.anti_tamper_surface || []).length;
+    const fw   = (j.framework_markers   || []).length;
+    return n + ' findings (' + mod + ' mod / ' + anti + ' anti-tamper / ' +
+      fw + ' framework) in ' + (j.wall_ms || 0) + 'ms';
+  } catch (e) {
+    return 'features error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   // The gate writes a state and returns. If the caller launched the run
   // as a fresh start, the gate pauses the pipeline by setting
@@ -720,6 +769,8 @@ export const pipelineRunner = {
         else if (phase === 'decompile')   summary = await phaseDecompile(ctx);
         else if (phase === 'diff')        summary = await phaseDiff(ctx);
         else if (phase === 'modBots')     summary = await phaseModBots(ctx);
+        else if (phase === 'bots')        summary = await phaseBots(ctx);
+        else if (phase === 'features')    summary = await phaseFeatures(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'revert')      summary = await phaseRevert(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);

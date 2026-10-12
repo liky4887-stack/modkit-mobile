@@ -40,21 +40,8 @@ export async function runStandaloneBots(apkPath: string): Promise<StandaloneBots
       throw new Error(err);
     }
 
-    const raw = j.findings || [];
-    const normalized = raw.map((f: any) => ({
-      unitId: null,
-      severity: f.severity || 'info',
-      category: f.category || 'bot-detection',
-      title: f.title || 'Untitled',
-      risk: f.risk || '',
-      evidenceClass: f.evidence_class || null,
-      evidenceMethod: f.evidence_method || null,
-      evidenceSource: f.evidence_source || 'bot:unknown',
-      patch: f.patch || {},
-      verification: f.verification || null,
-      confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
-      confidenceBand: f.confidence_band ?? 'medium',
-    }));
+    const { botFindingsToRows } = await import('./findingAdapters');
+    const normalized = botFindingsToRows(j.findings || []);
     await pipelineStore.createFindings(jobId, normalized);
     await pipelineStore.setJobState(jobId, 'done');
 
