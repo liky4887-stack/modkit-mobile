@@ -503,7 +503,8 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
     const rows = botFindingsToRows(j.findings || []);
     const n = await pipelineStore.createFindings(ctx.job.id, rows);
     const rejected = (j.shadow_rejections || []).length;
-    return n + ' findings in ' + (j.wall_ms || 0) + 'ms' +
+    const wall = j.total_ms || j._ms || 0;
+    return n + ' findings in ' + wall + 'ms' +
       (rejected ? ' · ' + rejected + ' shadow-rejected' : '');
   } catch (e) {
     return 'bots error: ' + (e as Error).message.slice(0, 180);
