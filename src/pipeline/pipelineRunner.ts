@@ -573,31 +573,92 @@ async function phaseNested(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
-  // The gate writes a state and returns. If the caller launched the run
-  // as a fresh start, the gate pauses the pipeline by setting
-  // review_state = 'awaiting_user' and returns a sentinel that run()
-  // recognizes so it stops the loop. The user opens the MODS tab,
-  // checks items to revert, and re-runs the pipeline with
-  // fromPhase: 'revert' — the gate passes through instantly because
-  // review_state is already 'decided'.
+  // The review gate is the aggregation point for the whole pre-gate
+  // chain. Every phase before this one — diff, modBots, bots, features,
+  // nested — writes its work into the same job. This function collects
+  // ALL of it (modifications + findings from every source), produces
+  // one summary, and pauses with the complete picture attached. The
+  // user reviews against the whole story, not just the mod list.
   const current = await pipelineStore.getReviewState(ctx.job.id);
   if (current === 'decided') {
     return 'review already decided';
   }
 
   const mods = await pipelineStore.listModifications(ctx.job.id);
+  const findings = await pipelineStore.listFindings(ctx.job.id);
   const reverted = mods.filter(m => m.reverted).length;
 
+  // ── Source split for findings ─────────────────────────────────
+  const bySource = { bot: 0, feature: 0, nested: 0, other: 0 };
+  for (const f of findings) {
+    const src = f.evidenceSource || '';
+    if (src.startsWith('feature_hunt'))      bySource.feature++;
+    else if (src.startsWith('nested'))       bySource.nested++;
+    else if (src.startsWith('bot') || src.toLowerCase().includes('bot'))
+                                             bySource.bot++;
+    else                                     bySource.other++;
+  }
+
+  // ── Severity split ────────────────────────────────────────────
+  const bySeverity: Record<string, number> = {};
+  for (const f of findings) {
+    bySeverity[f.severity] = (bySeverity[f.severity] || 0) + 1;
+  }
+
+  // ── Correlations: mods that also appear in a finding ─────────
+  // If the diff flagged a class and a feature hit or bot hit also
+  // mentions that class (evidenceClass substring match), we surface
+  // the connection so the user reviews it as one signal, not two.
+  const correlations: Array<{ mod: string; findings: string[] }> = [];
+  for (const m of mods) {
+    const hits: string[] = [];
+    for (const f of findings) {
+      const ev = (f.evidenceClass || '') + ' ' + (f.evidenceMethod || '');
+      if (ev.length > 0 && m.target && ev.includes(m.target.split('.').pop() || '')) {
+        hits.push(f.title);
+        if (hits.length >= 5) break;
+      }
+    }
+    if (hits.length > 0) {
+      correlations.push({ mod: m.target, findings: hits });
+      if (correlations.length >= 30) break;
+    }
+  }
+
+  const summary = {
+    modifications: mods.length,
+    reverted,
+    findings_total: findings.length,
+    findings_by_source: bySource,
+    findings_by_severity: bySeverity,
+    correlations,
+  };
+
+  // ── Persist into plan (merge, don't overwrite — phaseRevert also
+  //     writes to plan later with clean_apk etc.) ────────────────
+  const existingPlan = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+  await pipelineStore.setJobJson(ctx.job.id, 'plan', {
+    ...existingPlan,
+    pre_gate_summary: summary,
+  });
+
   if (current === 'pending' && reverted === 0) {
-    // First time through the gate: set awaiting_user and hand control
-    // back to the user. The sentinel '__REVIEW_GATE_PAUSE__' is what
-    // run() looks for.
+    // First time through: pause. The sentinel '__REVIEW_GATE_PAUSE__'
+    // halts run().
     await pipelineStore.setReviewState(ctx.job.id, 'awaiting_user');
-    ctx.emit('review_gate', 'pause', 'awaiting user decisions in MODS tab');
+    const pauseMsg =
+      mods.length + ' mods · ' + findings.length + ' findings (' +
+      bySource.bot + ' bot / ' + bySource.feature + ' feat / ' +
+      bySource.nested + ' nest)' +
+      (correlations.length ? ' · ' + correlations.length + ' correlated' : '');
+    ctx.emit('review_gate', 'pause', pauseMsg);
     return '__REVIEW_GATE_PAUSE__';
   }
 
-  return 'review complete — ' + reverted + ' item(s) marked for revert';
+  return (
+    'review complete — ' + reverted + ' mod(s) marked · ' +
+    findings.length + ' findings aggregated'
+  );
 }
 
 async function phaseRevert(ctx: PhaseContext): Promise<string> {

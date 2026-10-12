@@ -480,6 +480,18 @@ export const pipelineStore = {
     return { total, bySeverity, byState };
   },
 
+  async getPreGateSummary(jobId: string): Promise<{
+    modifications: number;
+    reverted: number;
+    findings_total: number;
+    findings_by_source: { bot: number; feature: number; nested: number; other: number };
+    findings_by_severity: Record<string, number>;
+    correlations: Array<{ mod: string; findings: string[] }>;
+  } | null> {
+    const plan = await this.getJobPlan(jobId);
+    return (plan as any)?.pre_gate_summary ?? null;
+  },
+
   async getJobPlan(jobId: string): Promise<{
     enhanced_apk?: string;
     final_size?: number;

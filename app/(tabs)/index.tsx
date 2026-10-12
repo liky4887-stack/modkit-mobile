@@ -54,6 +54,7 @@ export default function JobsTab() {
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [mods, setMods] = useState<ModRow[]>([]);
   const [jobFindings, setJobFindings] = useState<FindingRecord[]>([]);
+  const [preGate, setPreGate] = useState<any>(null);
   const [showFindings, setShowFindings] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -85,12 +86,20 @@ export default function JobsTab() {
       setMods([]);
       setSelected(new Set());
     }
-    // Findings from bots + features phases. Live in this same job.
+    // Findings from bots + features + nested phases. Live in this same job.
     try {
       const fs = await pipelineStore.listFindings(jobId);
       setJobFindings(fs);
     } catch {
       setJobFindings([]);
+    }
+    // Pre-gate aggregation — produced by phaseReviewGate and stored
+    // in plan_json so the review gate shows the whole pre-gate story.
+    try {
+      const pg = await pipelineStore.getPreGateSummary(jobId);
+      setPreGate(pg);
+    } catch {
+      setPreGate(null);
     }
   }, [reloadMods]);
 
@@ -287,7 +296,63 @@ export default function JobsTab() {
 
         {/* INLINE REVIEW — appears when paused */}
         {showReview && (
-          <View style={styles.block}>
+          <>
+            {/* Aggregate of every pre-gate phase. This is the whole
+                picture the user reviews against: diff mods, bot
+                detections, feature hits, nested-wrapper delta. */}
+            {preGate && (
+              <View style={styles.block}>
+                <Text style={styles.blockLabel}>PRE-GATE SUMMARY</Text>
+                <Text style={styles.help}>
+                  {preGate.modifications + ' mods · ' +
+                   preGate.findings_total + ' findings'}
+                </Text>
+                <View style={styles.grid}>
+                  <View style={styles.gridCell}>
+                    <Text style={[styles.gridNum, { color: colors.accent }]}>
+                      {preGate.findings_by_source.bot}
+                    </Text>
+                    <Text style={styles.gridLabel}>BOT</Text>
+                  </View>
+                  <View style={styles.gridCell}>
+                    <Text style={[styles.gridNum, { color: '#BF5AF2' }]}>
+                      {preGate.findings_by_source.feature}
+                    </Text>
+                    <Text style={styles.gridLabel}>FEAT</Text>
+                  </View>
+                  <View style={styles.gridCell}>
+                    <Text style={[styles.gridNum, { color: '#FF9500' }]}>
+                      {preGate.findings_by_source.nested}
+                    </Text>
+                    <Text style={styles.gridLabel}>NEST</Text>
+                  </View>
+                  {['critical','high','medium','low','info'].map(sev => {
+                    const n = preGate.findings_by_severity[sev] || 0;
+                    if (!n) return null;
+                    const tone =
+                      sev === 'critical' ? '#FF3B30' :
+                      sev === 'high'     ? '#FF9500' :
+                      sev === 'medium'   ? '#FFCC00' :
+                      sev === 'low'      ? '#34C759' :
+                      '#8E8E93';
+                    return (
+                      <View key={sev} style={styles.gridCell}>
+                        <Text style={[styles.gridNum, { color: tone }]}>{n}</Text>
+                        <Text style={styles.gridLabel}>{sev.slice(0,4).toUpperCase()}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+                {preGate.correlations && preGate.correlations.length > 0 && (
+                  <Text style={[styles.help, { marginTop: 8, color: '#34C759' }]}>
+                    {'· ' + preGate.correlations.length +
+                     ' mod(s) also appear in findings — cross-referenced below'}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            <View style={styles.block}>
             <Text style={styles.blockLabel}>
               {'REVIEW · ' + mods.length + ' MODIFICATION' + (mods.length === 1 ? '' : 'S')}
             </Text>
@@ -364,7 +429,8 @@ export default function JobsTab() {
                 </Pressable>
               </>
             )}
-          </View>
+            </View>
+          </>
         )}
 
         {/* FINDINGS — bot + feature hits for THIS job */}
