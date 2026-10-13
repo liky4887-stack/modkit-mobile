@@ -102,7 +102,8 @@ export interface UnitRecord {
 
 export const PHASES_ORDER = [
   // Single-APK analysis chain. No reference APK, no diff, no revert.
-  'import',       // load the target APK into the sidecar
+  'import',       // file stat + load target into sidecar
+  'decombine',    // probe for APK+OBB combined container; unpack + reload
   'bots',         // 18-bot detector roster
   'features',     // feature-hunt scan + fingerprint
   'nested',       // nested APK analysis

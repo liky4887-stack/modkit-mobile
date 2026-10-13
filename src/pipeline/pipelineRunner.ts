@@ -7,6 +7,7 @@ import { pipelineStore, JobRecord, PHASES_ORDER, type PhaseId } from './pipeline
 import { eventBus } from '@/monitor/eventBus';
 import { getDb } from '@/db/client';
 import { guardFetch } from './resilience/guard';
+import { preCheck, postCheck } from './phaseGuard';
 // PhaseId is defined in pipelineStore — imported above.
 // Re-exported for modules that historically imported it from here.
 export type { PhaseId };
@@ -244,7 +245,7 @@ async function fetchWithRetry(
 }
 
 async function phaseImport(ctx: PhaseContext): Promise<string> {
-  ctx.emit('import', 'start', 'verifying path');
+  ctx.emit('import', 'start', 'verifying target');
   const path = ctx.job.apkPath;
 
   const probe = await guardFetch('http://127.0.0.1:8792/file/stat', {
@@ -256,69 +257,14 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
     throw new Error('file not readable: ' + path);
   }
 
-  // If the file is a combined APK+OBB container (common for externally
-  // distributed games), unpack it first. The inner APK becomes the
-  // working path for every subsequent phase.
-  let workingPath = path;
-  let combinedMeta: any = null;
-  try {
-    const cp = await guardFetch('http://127.0.0.1:8792/tool/combined_probe', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path }),
-    }).then(r => r.json());
-
-    if (cp.ok && cp.combined) {
-      ctx.emit('import', 'running', 'combined container detected — unpacking');
-      const un = await guardFetch('http://127.0.0.1:8792/tool/combined_unpack', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path }),
-      }).then(r => r.json());
-
-      if (!un.ok) {
-        throw new Error('combined unpack failed: ' + (un.error || 'unknown'));
-      }
-
-      workingPath = un.inner_apk_path;
-      combinedMeta = {
-        combined_container: path,
-        inner_apk: un.inner_apk_path,
-        inner_obb: un.inner_obb_path,
-        inner_apk_size: un.inner_apk_size,
-        inner_obb_size: un.inner_obb_size,
-      };
-      ctx.emit('import', 'running',
-        'unpacked · apk ' + (un.inner_apk_size / 1e9).toFixed(2) + ' GB + obb ' +
-        (un.inner_obb_size / 1e6).toFixed(1) + ' MB');
-    }
-  } catch (e) {
-    console.warn('[import] combined probe skipped:', (e as Error).message.slice(0, 120));
-  }
-
   ctx.emit('import', 'running', 'loading into sidecar');
   const load = await guardFetch('http://127.0.0.1:8792/load', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ apk_path: workingPath }),
+    body: JSON.stringify({ apk_path: path }),
   }).then(r => r.json());
-  if (!load.ok) throw new Error('sidecar load failed: ' + (load.error || 'unknown'));
-
-  // If we unpacked a combined container, persist the inner paths so
-  // downstream phases (diff, export) operate on the inner APK and know
-  // where the OBB lives.
-  if (combinedMeta) {
-    const dbc = await getDb();
-    await dbc.runAsync(
-      `UPDATE pipeline_jobs SET apk_path = ?, updated_at = ? WHERE id = ?`,
-      [workingPath, Date.now(), ctx.job.id],
-    );
-    (ctx.job as any).apkPath = workingPath;
-    try {
-      await pipelineStore.setJobJson(ctx.job.id, 'plan', combinedMeta);
-    } catch (e) {
-      console.warn('[import] combined meta persist failed:', (e as Error).message.slice(0, 120));
-    }
+  if (!load.ok) {
+    throw new Error('sidecar load failed: ' + (load.error || 'unknown'));
   }
 
   // Persist real metadata
@@ -332,6 +278,104 @@ async function phaseImport(ctx: PhaseContext): Promise<string> {
          ' dex=' + load.dex_count + ' perms=' + load.permission_count +
          ' load=' + load.load_ms + 'ms';
 }
+
+async function phaseDecombine(ctx: PhaseContext): Promise<string> {
+  // Probe for an APK+OBB combined container. Some distributors ship
+  // the real game + OBB data inside a single outer APK. If so, unpack
+  // the inner APK + OBB to a working directory and reload the inner
+  // APK into the sidecar so every subsequent phase operates on the
+  // real target.
+  //
+  // If the file is a plain APK (the common case), this phase is a
+  // no-op and returns "not combined".
+  const BACKEND = 'http://127.0.0.1:8792';
+  const path = ctx.job.apkPath;
+  ctx.emit('decombine', 'start', 'probing for combined container');
+
+  let probe: any;
+  try {
+    probe = await fetchWithRetry(BACKEND + '/tool/combined_probe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }, { label: 'decombine:probe' })
+      .then(r => r.json());
+  } catch (e) {
+    throw new Error('combined_probe failed: ' + (e as Error).message.slice(0, 160));
+  }
+
+  if (!probe.ok) {
+    throw new Error('combined_probe returned not-ok: ' + (probe.error || 'unknown'));
+  }
+
+  if (!probe.combined) {
+    ctx.emit('decombine', 'done', 'plain APK — nothing to unpack');
+    return 'not combined — plain apk (' + (probe.reason || 'no inner apk+obb') + ')';
+  }
+
+  // It's a combined container. Unpack.
+  ctx.emit('decombine', 'running', 'unpacking inner apk + obb');
+  let un: any;
+  try {
+    un = await fetchWithRetry(BACKEND + '/tool/combined_unpack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }, { label: 'decombine:unpack', healthWaitMs: 180_000 })
+      .then(r => r.json());
+  } catch (e) {
+    throw new Error('combined_unpack failed: ' + (e as Error).message.slice(0, 160));
+  }
+
+  if (!un.ok) {
+    throw new Error('combined_unpack returned not-ok: ' + (un.error || 'unknown'));
+  }
+  if (!un.inner_apk_path) {
+    throw new Error('combined_unpack did not return inner_apk_path');
+  }
+
+  // Reload the inner APK into the sidecar so bots/features/nested/
+  // structural/anticheat all see the real target.
+  ctx.emit('decombine', 'running', 'loading inner apk into sidecar');
+  const load = await fetchWithRetry(BACKEND + '/load', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: un.inner_apk_path }),
+  }, { label: 'decombine:reload', healthWaitMs: 120_000 })
+    .then(r => r.json());
+  if (!load.ok) {
+    throw new Error('reload inner APK failed: ' + (load.error || 'unknown'));
+  }
+
+  // Persist the working path so downstream phases read the inner APK.
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE pipeline_jobs SET apk_path = ?, updated_at = ? WHERE id = ?`,
+    [un.inner_apk_path, Date.now(), ctx.job.id],
+  );
+  (ctx.job as any).apkPath = un.inner_apk_path;
+
+  // Save combined metadata into plan so export/report can reference it.
+  try {
+    const existing = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+    await pipelineStore.setJobJson(ctx.job.id, 'plan', {
+      ...existing,
+      combined_container: {
+        outer: path,
+        inner_apk: un.inner_apk_path,
+        inner_obb: un.inner_obb_path,
+        inner_apk_size: un.inner_apk_size,
+        inner_obb_size: un.inner_obb_size,
+        inner_apk_looks_valid: un.inner_apk_looks_valid,
+      },
+    });
+  } catch {}
+
+  return 'unpacked · apk ' + (un.inner_apk_size / 1e9).toFixed(2) + ' GB' +
+         ' + obb ' + (un.inner_obb_size / 1e6).toFixed(1) + ' MB' +
+         ' pkg=' + load.package + ' dex=' + load.dex_count;
+}
+
 
 async function phaseBots(ctx: PhaseContext): Promise<string> {
   // Run the deterministic detector roster against the target APK.
@@ -897,8 +941,14 @@ export const pipelineRunner = {
       emit(phase, 'start');
 
       try {
+        // ── Pre-flight guard ──────────────────────────
+        const pre = await preCheck(phase, job);
+        if (!pre.ok) {
+          throw new Error('preflight: ' + (pre.reason || 'unknown'));
+        }
         let summary: string;
         if (phase === 'import')           summary = await phaseImport(ctx);
+        else if (phase === 'decombine')   summary = await phaseDecombine(ctx);
         else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'features')    summary = await phaseFeatures(ctx);
         else if (phase === 'nested')      summary = await phaseNested(ctx);
@@ -912,6 +962,20 @@ export const pipelineRunner = {
         else                              summary = 'unknown phase: ' + phase;
 
         const elapsedMs = Date.now() - t0;
+
+        // ── Post-flight guard (skip review_gate) ────
+
+        if (phase !== 'review_gate') {
+
+          const post = await postCheck(phase, job, summary);
+
+          if (!post.ok) {
+
+            throw new Error('postflight: ' + (post.reason || 'unknown'));
+
+          }
+
+        }
 
         if (summary === '__REVIEW_GATE_PAUSE__') {
           // Store human-readable summary — the sentinel is internal.
