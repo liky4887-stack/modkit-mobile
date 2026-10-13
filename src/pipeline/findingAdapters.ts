@@ -231,3 +231,59 @@ export function anticheatReportToRows(report: any): NewFinding[] {
   }
   return rows;
 }
+
+
+// ── Native capabilities → findings ─────────────────────────────────
+// structural_api runs native_analyze on every .so and matches each
+// binary's imports/strings/exports against the capa-derived capability
+// vocabulary (capability_map.py). Each capability becomes its own
+// finding so behavioral signal shows up in the review gate as a
+// first-class row, not buried in another finding's evidence.
+//
+// Only capabilities with severity high or critical are emitted as
+// their own findings — medium/low/info stay as evidence on the
+// structural finding to avoid drowning the review gate.
+export function capabilitiesToRows(report: any): NewFinding[] {
+  const summary = report?.capabilities_summary;
+  if (!Array.isArray(summary) || summary.length === 0) return [];
+
+  const sevRank: Record<string, number> = {
+    critical: 0, high: 1, medium: 2, low: 3, info: 4,
+  };
+  const bandFor = (sev: string): 'high' | 'medium' | 'low' => {
+    if (sev === 'critical' || sev === 'high') return 'high';
+    if (sev === 'medium') return 'medium';
+    return 'low';
+  };
+  const confFor = (sev: string): number => {
+    if (sev === 'critical') return 0.95;
+    if (sev === 'high') return 0.85;
+    if (sev === 'medium') return 0.7;
+    return 0.5;
+  };
+
+  const rows: NewFinding[] = [];
+  for (const cap of summary) {
+    const sev = String(cap?.severity || 'info');
+    // Only promote high/critical to their own findings.
+    if (sevRank[sev] > 1) continue;
+    const libs: string[] = Array.isArray(cap?.libs) ? cap.libs : [];
+    rows.push({
+      unitId: null,
+      severity: (sev === 'critical' ? 'critical' : 'high') as any,
+      category: `capability:${cap?.category || 'unknown'}`,
+      title: `Capability: ${cap?.capability || 'unknown'}`,
+      risk: `Native code has the capability to ${
+        cap?.capability || 'perform unknown action'
+      }. Detected in ${libs.length} native lib(s).`,
+      evidenceClass: null,
+      evidenceMethod: null,
+      evidenceSource: `capability:${cap?.category || '?'}:${libs[0] || '?'}`,
+      patch: {},
+      verification: null,
+      confidence: confFor(sev),
+      confidenceBand: bandFor(sev),
+    });
+  }
+  return rows;
+}
