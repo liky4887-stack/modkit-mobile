@@ -8,7 +8,7 @@
 import React from 'react';
 import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { colors } from '@/theme/colors';
-import { styles } from './workflow.styles';
+import { styles } from '@/theme/workflow.styles';
 
 const SEV_COLOR: Record<string, string> = {
   critical: '#FF3B30', high: '#FF9500', medium: '#FFCC00',

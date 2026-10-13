@@ -17,8 +17,8 @@ import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
 import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
-import { GateReview } from './GateReview';
-import { styles } from './workflow.styles';
+import { GateReview } from '@/components/GateReview';
+import { styles } from '@/theme/workflow.styles';
 
 const BACKEND = 'http://127.0.0.1:8792';
 const DEFAULT_APK = '/storage/emulated/0/Download/DxCheat.apk';
