@@ -1,40 +1,42 @@
-// JOBS — the whole deterministic pipeline, one page.
+// JOBS — the unified workflow page.
 //
-// Top: TARGET (from file picker) + REFERENCE URL field.
-// Run: one button, enabled once a reference URL is present.
-// Paused: inline review list with checkboxes + DECIDE + RESUME.
-// Done: findings summary inline.
-
+// One target. One scan. One gate review. One decision. That decision
+// is either APPLY (build a signed APK with the selected patches) or
+// EXPORT (write the report only).
+//
+// All the pipeline phases still run server-side (import → bots →
+// features → nested → structural → anticheat → gates → review_gate).
+// The review_gate pauses here, and this page renders the decision.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Pressable,
-  TextInput, Alert, ActivityIndicator,
+  View, Text, ScrollView, Pressable, TextInput,
+  Alert, ActivityIndicator,
 } from 'react-native';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme';
 import { apkPicker } from '@/upload/apkPicker';
-import { pipelineStore, JobRecord, type FindingRecord } from '@/pipeline/pipelineStore';
+import { pipelineStore, JobRecord } from '@/pipeline/pipelineStore';
 import { pipelineRunner } from '@/pipeline/pipelineRunner';
+import { GateReview } from './GateReview';
+import { styles } from './workflow.styles';
 
+const BACKEND = 'http://127.0.0.1:8792';
+const DEFAULT_APK = '/storage/emulated/0/Download/DxCheat.apk';
 
-const SEV_COLOR: Record<string, string> = {
-  critical: '#FF3B30',
-  high: '#FF9500',
-  medium: '#FFCC00',
-  low: '#34C759',
-  info: '#8E8E93',
-};
-
-export default function JobsTab() {
-  const [targetPath, setTargetPath] = useState('/storage/emulated/0/SHAREit Lite/apps/PUBG_MOBILE.apk');
+export default function WorkflowTab() {
+  const [targetPath, setTargetPath] = useState(DEFAULT_APK);
   const [running, setRunning] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [steps, setSteps] = useState<string[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
-  const [jobFindings, setJobFindings] = useState<FindingRecord[]>([]);
   const [preGate, setPreGate] = useState<any>(null);
-  const [showFindings, setShowFindings] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [gates, setGates] = useState<any>(null);
+  const [outputPath, setOutputPath] = useState<string | null>(null);
+
+  const [selectedLicense, setSelectedLicense] = useState<Record<string, boolean>>({});
+  const [applyLogin, setApplyLogin] = useState(false);
+  const [selectedFeatures, setSelectedFeatures] = useState<Record<string, boolean>>({});
 
   const loadJob = useCallback(async (jobId: string) => {
     const j = await pipelineStore.getJob(jobId);
@@ -43,29 +45,32 @@ export default function JobsTab() {
     const phases = await pipelineStore.getPhases(jobId);
     setSteps(phases.map((p: any) =>
       '[' + p.phase + '] ' + p.state + (p.summary ? ' — ' + p.summary : '')));
-    const timing = phases
-      .filter((p: any) => p.startedAt && p.finishedAt)
-      .map((p: any) => p.phase + '=' + ((p.finishedAt - p.startedAt) / 1000).toFixed(1) + 's')
-      .join(' ');
-    setStatus((j.state || '?') + ' · ' + phases.length + ' phases' + (timing ? '\n' + timing : ''));
-    // Findings from bots + features + nested phases. Live in this same job.
+
     try {
-      const fs = await pipelineStore.listFindings(jobId);
-      setJobFindings(fs);
-    } catch {
-      setJobFindings([]);
-    }
-    // Pre-gate aggregation — produced by phaseReviewGate and stored
-    // in plan_json so the review gate shows the whole pre-gate story.
-    try {
-      const pg = await pipelineStore.getPreGateSummary(jobId);
-      setPreGate(pg);
+      const plan = await pipelineStore.getJobPlan(jobId);
+      setPreGate((plan as any)?.pre_gate_summary || null);
+      const g = (plan as any)?.gates || null;
+      setGates(g);
+
+      if (g) {
+        const lic: Record<string, boolean> = {};
+        for (const c of (g.license_gates || [])) {
+          lic[c.class + '#' + c.method] = true;
+        }
+        setSelectedLicense(lic);
+        setApplyLogin(!!g.login_redirect);
+        const ft: Record<string, boolean> = {};
+        for (const f of (g.patchable_features || [])) {
+          ft[f.class + '#' + f.method] = true;
+        }
+        setSelectedFeatures(ft);
+      }
     } catch {
       setPreGate(null);
+      setGates(null);
     }
   }, []);
 
-  // Restore latest job on mount
   useEffect(() => {
     (async () => {
       try {
@@ -92,6 +97,9 @@ export default function JobsTab() {
     setRunning(true);
     setSteps([]);
     setStatus('creating job…');
+    setOutputPath(null);
+    setPreGate(null);
+    setGates(null);
 
     try {
       const name = targetPath.split('/').pop() || 'target.apk';
@@ -106,17 +114,16 @@ export default function JobsTab() {
       const startedAt = Date.now();
       const result = await pipelineRunner.run(job.id, {
         onPhase: (phase, state, summary) => {
-          setSteps(prev => [...prev, '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
+          setSteps(prev => [...prev,
+            '[' + phase + '] ' + state + (summary ? ' — ' + summary : '')]);
           const el = ((Date.now() - startedAt) / 1000).toFixed(1);
           setStatus('RUNNING · ' + phase + ' · ' + state + ' · ' + el + 's');
         },
       });
 
       const elapsed = result.finishedAt - result.startedAt;
-      const timing = result.outcomes.map(o =>
-        o.phase + '=' + (o.elapsedMs / 1000).toFixed(1) + 's').join(' ');
-      setStatus(result.finalState + ' · ' + result.outcomes.length + ' phases · ' +
-        elapsed + 'ms\n' + timing);
+      setStatus(result.finalState + ' · ' + result.outcomes.length +
+        ' phases · ' + elapsed + 'ms');
       await loadJob(job.id);
     } catch (e) {
       setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
@@ -124,51 +131,119 @@ export default function JobsTab() {
     setRunning(false);
   }, [running, targetPath, loadJob]);
 
-  const proceedFromGate = useCallback(async () => {
+  const patchCount = useMemo(() => {
+    const fromLic = Object.values(selectedLicense).filter(Boolean).length;
+    const fromFeat = Object.values(selectedFeatures).filter(Boolean).length;
+    return fromLic + fromFeat + (applyLogin ? 1 : 0);
+  }, [selectedLicense, selectedFeatures, applyLogin]);
+
+  const buildTargets = useCallback(() => {
+    const targets: any[] = [];
+    if (gates?.license_gates) {
+      for (const g of gates.license_gates) {
+        if (!selectedLicense[g.class + '#' + g.method]) continue;
+        targets.push({
+          type: 'force_return', class: g.class, method: g.method,
+          dex: g.dex, force_value: true,
+        });
+      }
+    }
+    if (gates?.patchable_features) {
+      for (const f of gates.patchable_features) {
+        if (!selectedFeatures[f.class + '#' + f.method]) continue;
+        targets.push({
+          type: 'force_return', class: f.class, method: f.method,
+          force_value: true,
+        });
+      }
+    }
+    if (applyLogin && gates?.login_redirect) {
+      targets.push({
+        type: 'launcher_redirect',
+        class: gates.login_redirect.launcher,
+        dest_class: gates.login_redirect.destination,
+      });
+    }
+    const seen = new Set<string>();
+    return targets.filter(t => {
+      const k = t.type + '|' + t.class + '|' + (t.method || t.dest_class || '');
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [gates, selectedLicense, selectedFeatures, applyLogin]);
+
+  const onApply = useCallback(async () => {
     if (!currentJob || busy) return;
-    setBusy(true);
+    const targets = buildTargets();
+    if (targets.length === 0) {
+      Alert.alert('Nothing selected', 'Pick at least one patch target.');
+      return;
+    }
+    setBusy('apply');
+    setStatus('building signed APK (' + targets.length + ' patches)…');
     try {
+      const out = currentJob.apkPath.replace(/\.apk$/i, '') + '-bypassed.apk';
+      const r = await fetch(BACKEND + '/tool/apk_license_bypass', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          apk_path: currentJob.apkPath,
+          output_path: out,
+          targets,
+        }),
+      }).then(x => x.json());
+      if (!r.ok) throw new Error(r.error || 'apply failed');
+      setOutputPath(r.final_apk || out);
       await pipelineStore.setReviewState(currentJob.id, 'decided');
-      setStatus('running export → audit…');
-      const r = await pipelineRunner.run(currentJob.id, { fromPhase: 'export' as any });
-      setStatus(r.finalState + ' · ' + r.outcomes.length + ' phases · ' +
-        (r.finishedAt - r.startedAt) + 'ms');
+      setStatus('patched → running export…');
+      const pr = await pipelineRunner.run(currentJob.id, {
+        fromPhase: 'export' as any,
+      });
+      setStatus('done · ' + targets.length + ' patches · ' + pr.finalState);
       await loadJob(currentJob.id);
     } catch (e) {
-      setStatus('FAIL · ' + (e instanceof Error ? e.message : String(e)));
+      setStatus('FAIL · ' +
+        (e instanceof Error ? e.message : String(e)).slice(0, 200));
     }
-    setBusy(false);
+    setBusy(null);
+  }, [currentJob, busy, buildTargets, loadJob]);
+
+  const onExport = useCallback(async () => {
+    if (!currentJob || busy) return;
+    setBusy('export');
+    setStatus('exporting report…');
+    try {
+      await pipelineStore.setReviewState(currentJob.id, 'decided');
+      const r = await pipelineRunner.run(currentJob.id, {
+        fromPhase: 'export' as any,
+      });
+      setStatus('done · ' + r.finalState);
+      await loadJob(currentJob.id);
+    } catch (e) {
+      setStatus('FAIL · ' +
+        (e instanceof Error ? e.message : String(e)).slice(0, 200));
+    }
+    setBusy(null);
   }, [currentJob, busy, loadJob]);
 
-  const phaseState = currentJob?.state;
-  const showReview = phaseState === 'awaiting_user';
+  const showReview =
+    currentJob?.state === 'awaiting_user' && preGate && gates !== undefined;
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
-        <Text style={styles.topBarTitle}>MODKIT · JOBS</Text>
+        <Text style={styles.topBarTitle}>MODKIT · WORKFLOW</Text>
+        {currentJob && (
+          <Text style={styles.topBarBadge}>
+            {String(currentJob.state).toUpperCase()}
+          </Text>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* SELECT APK */}
         <View style={styles.block}>
-          <Text style={styles.blockLabel}>SELECT APK</Text>
-          <Text style={styles.help}>
-            Pick the TARGET .apk. Currently: {targetPath.split('/').pop()}
-          </Text>
-          <Pressable onPress={pickTarget} style={styles.primaryBtn}>
-            <Text style={styles.primaryBtnText}>SELECT APK</Text>
-          </Pressable>
-        </View>
-
-        {/* RUN PIPELINE */}
-        <View style={styles.block}>
-          <Text style={styles.blockLabel}>RUN ANALYSIS</Text>
-          <Text style={styles.help}>
-            import → bots → features → nested → review → export → audit
-          </Text>
-
-          <Text style={[styles.miniLabel, { marginTop: 10 }]}>TARGET APK</Text>
+          <Text style={styles.blockLabel}>TARGET APK</Text>
           <TextInput
             value={targetPath}
             onChangeText={setTargetPath}
@@ -179,238 +254,63 @@ export default function JobsTab() {
             placeholder="/storage/emulated/0/.../your.apk"
             placeholderTextColor={colors.textTertiary}
           />
-
-          <Pressable
-            onPress={pickTarget}
-            style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }]}
-          >
-            <Text style={styles.miniText}>PICK FROM FILES</Text>
+          <Pressable onPress={pickTarget} disabled={running}
+            style={[styles.btnAlt, { marginTop: 8 }]}>
+            <Text style={styles.btnAltText}>PICK FROM FILES</Text>
           </Pressable>
-
-          <Pressable
-            onPress={runPipeline}
-            disabled={running || (currentJob?.state === 'awaiting_user')}
-            style={[
-              styles.primaryBtn, { marginTop: 12 },
-              (running || currentJob?.state === 'awaiting_user') && styles.btnDisabled,
-            ]}
-          >
-            <Text style={styles.primaryBtnText}>
-              {running
-                ? 'ANALYSING…'
-                : currentJob?.state === 'awaiting_user'
-                  ? 'PAUSED — RESOLVE ANALYSIS BELOW'
-                  : 'RUN ANALYSIS'}
+          <Pressable onPress={runPipeline}
+            disabled={running || currentJob?.state === 'awaiting_user'}
+            style={[styles.btn, { marginTop: 8 },
+              (running || currentJob?.state === 'awaiting_user') && styles.btnDisabled]}>
+            <Text style={styles.btnText}>
+              {running ? 'RUNNING…'
+                : currentJob?.state === 'awaiting_user' ? 'PAUSED — SEE GATE REVIEW'
+                : 'RUN FULL ANALYSIS'}
             </Text>
           </Pressable>
-
           {status && (
-            <Text style={[styles.status, status.startsWith('FAIL') && { color: '#FF3B30' }]}>
+            <Text style={[styles.status,
+              status.startsWith('FAIL') && { color: '#FF3B30' }]}>
               {status}
             </Text>
           )}
         </View>
 
-        {/* PHASE LOG */}
         {steps.length > 0 && (
           <View style={styles.block}>
             <Text style={styles.blockLabel}>PHASES</Text>
             {steps.map((s, i) => (
-              <Text key={i} style={styles.stepLine}>{s}</Text>
+              <Text key={i} style={styles.phaseLine}>{s}</Text>
             ))}
           </View>
         )}
 
-        {/* ANALYSIS RESULT — every signal, inline */}
-        {showReview && preGate && (
+        {showReview && (
+          <GateReview
+            preGate={preGate}
+            gates={gates}
+            selectedLicense={selectedLicense}
+            onToggleLicense={(key) =>
+              setSelectedLicense(s => ({ ...s, [key]: !s[key] }))}
+            applyLogin={applyLogin}
+            onToggleLogin={() => setApplyLogin(v => !v)}
+            selectedFeatures={selectedFeatures}
+            onToggleFeature={(key) =>
+              setSelectedFeatures(s => ({ ...s, [key]: !s[key] }))}
+            patchCount={patchCount}
+            busy={busy}
+            onApply={onApply}
+            onExport={onExport}
+          />
+        )}
+
+        {outputPath && (
           <View style={styles.block}>
-            <Text style={styles.blockLabel}>ANALYSIS RESULT</Text>
-
-            {/* ── Mod signals — real findings, full detail ──────── */}
-            {(preGate.mod_signals && preGate.mod_signals.length > 0) ? (
-              <>
-                <Text style={styles.alertHeader}>
-                  {'⚠ ' + preGate.mod_signals.length +
-                   ' MOD SIGNAL' + (preGate.mod_signals.length === 1 ? '' : 'S')}
-                </Text>
-                {preGate.mod_signals.map((m: any, i: number) => (
-                  <View key={i} style={styles.signalCard}>
-                    <View style={styles.signalTop}>
-                      <View style={[styles.sevPill, { backgroundColor: '#FF3B30' }]}>
-                        <Text style={styles.sevPillText}>MOD</Text>
-                      </View>
-                      <Text style={styles.signalCategory}>
-                        {(m.category || '?').toUpperCase()}
-                      </Text>
-                      <Text style={styles.signalConf}>
-                        {m.confidence != null ? m.confidence.toFixed(2) : '?'}
-                      </Text>
-                    </View>
-                    <Text style={styles.signalTitle}>{m.title}</Text>
-                    {m.evidence_method && (
-                      <Text style={styles.signalEvidence} numberOfLines={3}>
-                        {m.evidence_method}
-                      </Text>
-                    )}
-                    {m.risk && (
-                      <Text style={styles.signalRisk}>{m.risk}</Text>
-                    )}
-                  </View>
-                ))}
-              </>
-            ) : (
-              <Text style={styles.cleanBanner}>
-                ✓ No mod code detected in this APK
-              </Text>
-            )}
-
-            {/* ── Anti-tamper surface — what the target defends ── */}
-            {(preGate.defense_signals && preGate.defense_signals.length > 0) && (
-              <>
-                <Text style={styles.sectionHeader}>
-                  {'ANTI-TAMPER SURFACE · ' + preGate.defense_signals.length}
-                </Text>
-                {preGate.defense_signals.map((d: any, i: number) => (
-                  <View key={i} style={styles.signalRow}>
-                    <View style={[styles.sevPill, { backgroundColor: '#8E8E93' }]}>
-                      <Text style={styles.sevPillText}>DEF</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.signalTitle}>{d.title}</Text>
-                      <Text style={styles.signalMeta}>
-                        {(d.category || '?') + ' · ' +
-                         (d.confidence != null ? d.confidence.toFixed(2) : '?')}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </>
-            )}
-
-            {/* ── Framework markers ───────────────────────────── */}
-            {(preGate.framework_signals && preGate.framework_signals.length > 0) && (
-              <>
-                <Text style={styles.sectionHeader}>
-                  {'FRAMEWORK MARKERS · ' + preGate.framework_signals.length}
-                </Text>
-                {preGate.framework_signals.map((f: any, i: number) => (
-                  <View key={i} style={styles.signalRow}>
-                    <View style={[styles.sevPill, { backgroundColor: '#5AC8FA' }]}>
-                      <Text style={styles.sevPillText}>FW</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.signalTitle}>{f.title}</Text>
-                      <Text style={styles.signalMeta}>
-                        {(f.category || '?') + ' · ' +
-                         (f.confidence != null ? f.confidence.toFixed(2) : '?')}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </>
-            )}
-
-            {/* ── Nested container ─────────────────────────────── */}
-            {(preGate.nested_signals && preGate.nested_signals.length > 0) && (
-              <>
-                <Text style={styles.sectionHeader}>
-                  {'NESTED CONTAINER · ' + preGate.nested_signals.length}
-                </Text>
-                {preGate.nested_signals.map((n: any, i: number) => (
-                  <View key={i} style={styles.signalRow}>
-                    <View style={[styles.sevPill, { backgroundColor: '#FF9500' }]}>
-                      <Text style={styles.sevPillText}>NEST</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.signalTitle}>{n.title}</Text>
-                      {n.risk && (
-                        <Text style={styles.signalMeta} numberOfLines={2}>{n.risk}</Text>
-                      )}
-                    </View>
-                  </View>
-                ))}
-              </>
-            )}
-
-            {/* ── SDK roster footer ────────────────────────────── */}
-            {/* ── ALL FINDINGS — every row, in this same block ── */}
-            {jobFindings.length > 0 && (
-              <View style={{ marginTop: 16 }}>
-                <Text style={styles.sectionHeader}>
-                  {'ALL FINDINGS · ' + jobFindings.length}
-                </Text>
-                <View style={styles.grid}>
-                  {['critical', 'high', 'medium', 'low', 'info'].map(sev => {
-                    const n = jobFindings.filter(f => f.severity === sev).length;
-                    if (!n) return null;
-                    return (
-                      <View key={sev} style={styles.gridCell}>
-                        <Text style={[styles.gridNum, { color: SEV_COLOR[sev] }]}>
-                          {n}
-                        </Text>
-                        <Text style={styles.gridLabel}>{sev.slice(0, 4).toUpperCase()}</Text>
-                      </View>
-                    );
-                  })}
-                </View>
-
-                <Pressable
-                  onPress={() => setShowFindings(v => !v)}
-                  style={[styles.miniBtn, { marginTop: 10, alignSelf: 'flex-start' }]}
-                >
-                  <Text style={styles.miniText}>
-                    {showFindings
-                      ? 'HIDE LIST'
-                      : 'SHOW LIST (' + jobFindings.length + ')'}
-                  </Text>
-                </Pressable>
-
-                {showFindings && (
-                  <View style={{ marginTop: 8 }}>
-                    {jobFindings.slice(0, 200).map(f => {
-                      const src = (f.evidenceSource || '');
-                      const tag = src.startsWith('feature_hunt') ? 'FEAT'
-                                : src.startsWith('nested')       ? 'NEST'
-                                : src.startsWith('bot')          ? 'BOT'
-                                : 'OTH';
-                      return (
-                        <View key={f.id} style={styles.findingRow}>
-                          <View style={[styles.sevPill, { backgroundColor: SEV_COLOR[f.severity] || '#8E8E93' }]}>
-                            <Text style={styles.sevPillText}>
-                              {f.severity.slice(0, 4).toUpperCase()}
-                            </Text>
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.findingTitle} numberOfLines={2}>
-                              {f.title}
-                            </Text>
-                            <Text style={styles.findingMeta}>
-                              {tag + ' · ' + f.category +
-                               (f.confidenceBand ? ' · ' + f.confidenceBand : '')}
-                            </Text>
-                          </View>
-                        </View>
-                      );
-                    })}
-                    {jobFindings.length > 200 && (
-                      <Text style={styles.help}>
-                        {'…' + (jobFindings.length - 200) + ' more'}
-                      </Text>
-                    )}
-                  </View>
-                )}
-              </View>
-            )}
-
-            <Pressable
-              onPress={proceedFromGate}
-              disabled={busy}
-              style={[styles.decideBtn, busy && styles.btnDisabled]}
-            >
-              <Text style={styles.decideText}>
-                {busy ? 'EXPORTING…' : 'PROCEED · EXPORT REPORT'}
-              </Text>
-            </Pressable>
+            <Text style={styles.blockLabel}>OUTPUT</Text>
+            <Text style={styles.outPath}>{outputPath}</Text>
+            <Text style={styles.hint}>
+              Uninstall the original, then install from Files.
+            </Text>
           </View>
         )}
 
@@ -419,7 +319,9 @@ export default function JobsTab() {
           <RecentJobs onPick={(id) => loadJob(id)} />
         </View>
 
-        {busy && <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />}
+        {busy && (
+          <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
+        )}
       </ScrollView>
     </View>
   );
@@ -437,86 +339,12 @@ function RecentJobs({ onPick }: { onPick: (id: string) => void }) {
     <>
       {jobs.map(j => (
         <Pressable key={j.id} onPress={() => onPick(j.id)} style={styles.jobRow}>
-          <Text style={styles.jobName} numberOfLines={1}>{j.apkName || j.id.slice(0, 12)}</Text>
+          <Text style={styles.jobName} numberOfLines={1}>
+            {j.apkName || j.id.slice(0, 12)}
+          </Text>
           <Text style={styles.jobState}>{j.state}</Text>
         </Pressable>
       ))}
     </>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.pureBlack },
-  topBar: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
-  topBarTitle: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 2 },
-  content: { padding: spacing.md, paddingBottom: 60 },
-  block: { marginBottom: spacing.md, padding: spacing.md, backgroundColor: colors.surface, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
-  blockLabel: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10, letterSpacing: 2, marginBottom: 8 },
-  miniLabel: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 9, letterSpacing: 2, marginBottom: 4 },
-  help: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 11, lineHeight: 16 },
-  pathText: { color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 15, marginBottom: 4 },
-  input: {
-    color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10,
-    backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1,
-    borderColor: colors.border, paddingHorizontal: 8, paddingVertical: 8,
-  },
-  primaryBtn: { backgroundColor: colors.accent, borderRadius: 6, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
-  primaryBtnText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 1 },
-  btnDisabled: { opacity: 0.4 },
-  status: { color: colors.accent, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, marginTop: 12, lineHeight: 15 },
-  stepLine: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 15 },
-
-  group: { marginTop: 10, backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
-  groupHeader: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, paddingBottom: 6 },
-  groupTitle: { color: colors.textPrimary, fontFamily: 'Inter-SemiBold', fontSize: 12 },
-  groupMeta: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginTop: 2 },
-  groupChevron: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 14, marginLeft: 8 },
-  groupActions: { flexDirection: 'row', gap: 6, paddingHorizontal: spacing.md, paddingBottom: 8 },
-  miniBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 4, borderWidth: 1, borderColor: colors.border },
-  miniOn: { backgroundColor: colors.accent, borderColor: colors.accent },
-  miniText: { color: colors.textTertiary, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1 },
-  miniTextOn: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1 },
-
-  modRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: spacing.md, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
-  modRowOn: { backgroundColor: 'rgba(0,255,136,0.06)' },
-  checkbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
-  checkboxOn: { backgroundColor: colors.accent, borderColor: colors.accent },
-  checkMark: { color: colors.pureBlack, fontFamily: 'Inter-Bold', fontSize: 12 },
-  modTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  pill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
-  pillText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 8, letterSpacing: 0.5 },
-  kindText: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 9 },
-  targetText: { color: colors.textPrimary, fontFamily: 'JetBrainsMono-Regular', fontSize: 10, lineHeight: 14 },
-
-  decideBtn: { marginTop: 12, backgroundColor: colors.accent, borderRadius: 6, paddingVertical: 14, alignItems: 'center' },
-  decideText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 12, letterSpacing: 1 },
-
-  grid: { flexDirection: 'row', marginTop: 8 },
-  gridCell: { flex: 1, alignItems: 'center' },
-  gridNum: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 16 },
-  gridLabel: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 8, letterSpacing: 1, marginTop: 2 },
-
-  findingRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
-  sevPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3, marginTop: 2 },
-  sevPillText: { color: colors.pureBlack, fontFamily: 'Inter-SemiBold', fontSize: 8, letterSpacing: 0.5 },
-  findingTitle: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, lineHeight: 15 },
-  findingMeta: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 2 },
-
-  jobRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
-  jobName: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 11, flex: 1 },
-  jobState: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginLeft: 8 },
-
-  alertHeader: { color: '#FF3B30', fontFamily: 'Inter-SemiBold', fontSize: 13, marginBottom: 10, letterSpacing: 1 },
-  cleanBanner: { color: '#34C759', fontFamily: 'Inter-Regular', fontSize: 12, marginBottom: 4 },
-  sectionHeader: { color: colors.accent, fontFamily: 'Inter-SemiBold', fontSize: 10, letterSpacing: 2, marginTop: 16, marginBottom: 8 },
-  signalCard: { backgroundColor: colors.pureBlack, borderRadius: 6, borderWidth: 1, borderColor: colors.border, padding: 10, marginBottom: 8 },
-  signalTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  signalCategory: { color: colors.textTertiary, fontFamily: 'Inter-SemiBold', fontSize: 9, letterSpacing: 1, flex: 1 },
-  signalConf: { color: colors.accent, fontFamily: 'JetBrainsMono-Regular', fontSize: 10 },
-  signalRisk: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, lineHeight: 14, marginTop: 4, opacity: 0.8 },
-  signalTitle: { color: colors.textPrimary, fontFamily: 'Inter-Regular', fontSize: 12, lineHeight: 16 },
-  signalMeta: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 2 },
-  signalEvidence: { color: colors.textTertiary, fontFamily: 'JetBrainsMono-Regular', fontSize: 9, marginTop: 4, opacity: 0.75 },
-  signalRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
-  sdkFooter: { color: colors.textTertiary, fontFamily: 'Inter-Regular', fontSize: 10, marginTop: 14, opacity: 0.7 },
-});

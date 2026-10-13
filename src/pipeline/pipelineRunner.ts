@@ -498,6 +498,63 @@ async function phaseAnticheat(ctx: PhaseContext): Promise<string> {
   }
 }
 
+async function phaseGates(ctx: PhaseContext): Promise<string> {
+  // Runs the license + login scans and extracts patchable targets from
+  // findings already in the DB. The review gate reads these from
+  // plan.gates to render the decision UI.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('gates', 'start', 'license + login + patchable scan');
+
+  const [lic, log] = await Promise.all([
+    fetchWithRetry(BACKEND + '/tool/apk_license_scan', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    }, { label: 'gates:license' })
+      .then(r => r.json())
+      .catch(e => ({ ok: false, error: String(e) })),
+    fetchWithRetry(BACKEND + '/tool/apk_login_scan', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    }, { label: 'gates:login' })
+      .then(r => r.json())
+      .catch(e => ({ ok: false, error: String(e) })),
+  ]);
+
+  const license_gates = (lic && lic.candidates) || [];
+  const login_redirect =
+    (log && log.launcher && log.destination)
+      ? { launcher: log.launcher, destination: log.destination }
+      : null;
+
+  // Walk findings — anything with patch.patchable_class becomes a target.
+  const findings = await pipelineStore.listFindings(ctx.job.id).catch(() => []);
+  const patchable_features: any[] = [];
+  for (const f of findings) {
+    const patch = f.patch as any;
+    if (patch && patch.patchable_class && patch.patchable_method) {
+      patchable_features.push({
+        class: patch.patchable_class,
+        method: patch.patchable_method,
+        feature_id: f.evidenceClass || '',
+        feature_name: f.title,
+        severity: f.severity,
+      });
+    }
+  }
+
+  const existingPlan = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+  await pipelineStore.setJobJson(ctx.job.id, 'plan', {
+    ...existingPlan,
+    gates: { license_gates, login_redirect, patchable_features },
+  });
+
+  return (
+    license_gates.length + ' license · ' +
+    (login_redirect ? 'login found' : 'no login') + ' · ' +
+    patchable_features.length + ' patchable features'
+  );
+}
+
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   // Review gate — the pause point where the user sees the analysis
   // result and decides whether to proceed. In single-APK mode this is
@@ -586,9 +643,15 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   };
 
   const existingPlan = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+  const gatesData: any = (existingPlan as any).gates || {};
   await pipelineStore.setJobJson(ctx.job.id, 'plan', {
     ...existingPlan,
-    pre_gate_summary: summary,
+    pre_gate_summary: {
+      ...summary,
+      license_gates: gatesData.license_gates || [],
+      login_redirect: gatesData.login_redirect || null,
+      patchable_features: gatesData.patchable_features || [],
+    },
   });
 
   if (current === 'pending' && reverted === 0) {
@@ -774,6 +837,7 @@ export const pipelineRunner = {
         else if (phase === 'nested')      summary = await phaseNested(ctx);
         else if (phase === 'structural')  summary = await phaseStructural(ctx);
         else if (phase === 'anticheat')   summary = await phaseAnticheat(ctx);
+        else if (phase === 'gates')       summary = await phaseGates(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);

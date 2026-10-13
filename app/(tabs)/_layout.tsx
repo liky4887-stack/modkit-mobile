@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import { colors } from '@/theme/colors';
-import { Activity, Radio, Settings, ShieldAlert, Scissors } from 'lucide-react-native';
+import { Activity, Radio, Settings, ShieldAlert } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
@@ -57,15 +57,6 @@ export default function TabLayout() {
           title: 'SYSTEM',
           tabBarIcon: ({ color, size }) => (
             <Settings size={size - 4} color={color} strokeWidth={2} />
-          ),
-        }}
-      />
-        <Tabs.Screen
-          name="surgery"
-          options={{
-            title: 'SURGERY',
-            tabBarIcon: ({ color, size }) => (
-              <Scissors size={size - 4} color={color} strokeWidth={2} />
             ),
           }}
         />

@@ -1,3 +1,40 @@
+
+// ── Patchable extraction ────────────────────────────────────────────
+// A feature finding is "patchable" if its evidence contains a
+// reference to a non-framework class + method descriptor. That gives
+// us a concrete target: force-return that method to disable the
+// feature at the smali layer.
+const _FQCN_RE = /L([a-zA-Z][\w/$]+);/;
+const _METHOD_RE = /->([a-zA-Z_$][\w$]*)\s*\(/;
+const _FRAMEWORK_PREFIXES = [
+  'java.', 'android.', 'androidx.', 'kotlin.', 'kotlinx.', 'dalvik.',
+];
+
+function _extractPatchable(evidence: any[]): { fqcn: string; method: string } | null {
+  if (!Array.isArray(evidence)) return null;
+  for (const ev of evidence) {
+    if (!ev || typeof ev !== 'object') continue;
+    const blob = String(ev.matched || '') + ' ' + String(ev.source || '');
+    const cm = blob.match(_FQCN_RE);
+    if (!cm) continue;
+    const fqcn = cm[1].replace(/\//g, '.');
+    if (_FRAMEWORK_PREFIXES.some(p => fqcn.startsWith(p))) continue;
+    const mm = blob.match(_METHOD_RE);
+    if (!mm) continue;
+    return { fqcn, method: mm[1] };
+  }
+  return null;
+}
+
+function _patchFieldFor(evidence: any[], extra: Record<string, any> = {}): any {
+  const t = _extractPatchable(evidence || []);
+  return {
+    ...extra,
+    patchable_class: t ? t.fqcn : null,
+    patchable_method: t ? t.method : null,
+  };
+}
+
 // Shared adapters that turn sidecar tool output into NewFinding rows.
 // Both the standalone buttons on FINDINGS and the pipeline phases
 // route through here so there is exactly one conversion per source.

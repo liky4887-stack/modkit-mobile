@@ -101,16 +101,15 @@ export interface UnitRecord {
 }
 
 export const PHASES_ORDER = [
-  // Single-APK analysis chain. No reference APK, no diff, no revert —
-  // the tool is a mod detector, not a comparator. Every phase here
-  // works against one APK the user picked.
+  // Single-APK analysis chain. No reference APK, no diff, no revert.
   'import',       // load the target APK into the sidecar
   'bots',         // 18-bot detector roster
-  'features',     // feature-hunt scan + fingerprint (Drebin + rules DB)
-  'nested',       // nested APK analysis — outer vs inner class delta
-  'structural',   // native .so + framework + OBB structural analysis
-  'anticheat',    // ACE roster + integrity (modified / intact)
-  'review_gate',  // pause — show analysis result, user proceeds
+  'features',     // feature-hunt scan + fingerprint
+  'nested',       // nested APK analysis
+  'structural',   // native .so + capabilities
+  'anticheat',    // ACE roster + integrity
+  'gates',        // license + login scan + patchable extraction
+  'review_gate',  // pause — show everything, user decides
   'export',       // markdown report
   'audit',        // counts
 ] as const;
