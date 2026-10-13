@@ -249,6 +249,51 @@ interface PhaseContext {
 
 // ── phase: import ───────────────────────────────────────
 
+// ── Resilient fetch: retry through sidecar death ───────────────────
+// Xiaomi HyperOS phantom-killer can terminate the sidecar mid-run.
+// The watchdog restarts it within ~20s. This wrapper waits for the
+// sidecar to come back instead of failing the phase immediately.
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: { maxAttempts?: number; healthWaitMs?: number; label?: string } = {},
+): Promise<Response> {
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const healthWaitMs = opts.healthWaitMs ?? 60_000;
+  const label = opts.label ?? url;
+
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const r = await fetch(url, init);
+      return r;
+    } catch (e) {
+      lastErr = e;
+      const msg = String((e as Error)?.message ?? e);
+      const isConnRefused = /network request failed|econnrefused|failed to fetch/i.test(msg);
+      if (!isConnRefused || attempt >= maxAttempts) throw e;
+
+      // Sidecar is down. Wait for the watchdog to bring it back.
+      console.log(`[fetch] ${label} attempt ${attempt} failed (${msg.slice(0,80)}) — waiting for sidecar`);
+      const t0 = Date.now();
+      let restored = false;
+      while (Date.now() - t0 < healthWaitMs) {
+        await new Promise(res => setTimeout(res, 2000));
+        try {
+          const h = await fetch('http://127.0.0.1:8792/health', { method: 'GET' });
+          if (h.ok) { restored = true; break; }
+        } catch { /* still down, keep waiting */ }
+      }
+      if (!restored) {
+        console.log(`[fetch] ${label} sidecar did not return within ${healthWaitMs}ms`);
+        throw e;
+      }
+      console.log(`[fetch] ${label} sidecar restored — retrying`);
+    }
+  }
+  throw lastErr ?? new Error('fetchWithRetry exhausted');
+}
+
 async function phaseImport(ctx: PhaseContext): Promise<string> {
   ctx.emit('import', 'start', 'verifying path');
   const path = ctx.job.apkPath;
@@ -365,62 +410,56 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseFeatures(ctx: PhaseContext): Promise<string> {
-  // Two independent feature engines, both called, findings merged:
-  //   1. feature_bots_run   10-bot fleet (aimbot/esp/overlay/hooks...)
-  //   2. apk_feature_full   rules DB + Drebin (ESP/aimbot keywords
-  //                         + anti-check disambiguation)
+  // Two independent feature engines run in PARALLEL:
+  //   1. feature_bots_run   17-bot fleet
+  //   2. apk_feature_full_v3   rules DB + Drebin
   //
-  // The fleet covers structural bot logic; the rules DB covers literal
-  // mod strings and anti-tamper classification. Dropping either one
-  // loses coverage — the fleet alone misses the anti_tamper_surface
-  // bucket and the rules-DB keyword scan.
+  // Before this was sequential — 425s total on SHI. Parallel cuts
+  // wall time to ~max(t1, t2) instead of t1 + t2, and fewer seconds
+  // in-flight means fewer chances for the Xiaomi phantom killer to
+  // strike mid-phase.
   const BACKEND = 'http://127.0.0.1:8792';
   const { featureReportToRows } = await import('./findingAdapters');
-  let totalInserted = 0;
-  let modCount = 0, antiCount = 0, fwCount = 0;
   const t0 = Date.now();
 
-  // ── 1. Fleet ─────────────────────────────────────────────────
-  ctx.emit('features', 'start', 'feature bot fleet (~100s)');
-  try {
-    const r = await fetch(BACKEND + '/tool/feature_bots_run', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
-    });
-    const j: any = await r.json();
-    if (j.ok) {
-      const rows = featureReportToRows(j);
-      totalInserted += await pipelineStore.createFindings(ctx.job.id, rows);
-      modCount  += (j.mod_artifacts       || []).length;
-      antiCount += (j.anti_tamper_surface || []).length;
-      fwCount   += (j.framework_markers   || []).length;
+  const fleetP = fetchWithRetry(BACKEND + '/tool/feature_bots_run', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'features:fleet', maxAttempts: 3, healthWaitMs: 120_000 })
+    .then(r => r.json())
+    .catch(e => ({ ok: false, error: 'fleet: ' + (e as Error).message.slice(0, 120) }));
+
+  const rulesP = fetchWithRetry(BACKEND + '/tool/apk_feature_full_v3', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'features:rules', maxAttempts: 3, healthWaitMs: 120_000 })
+    .then(r => r.json())
+    .catch(e => ({ ok: false, error: 'rules: ' + (e as Error).message.slice(0, 120) }));
+
+  ctx.emit('features', 'start', 'fleet + rules-DB in parallel');
+  const [fleet, rules] = await Promise.all([fleetP, rulesP]);
+
+  let inserted = 0, mod = 0, anti = 0, fw = 0;
+  for (const [name, j] of [['fleet', fleet], ['rules', rules]] as const) {
+    if (!j || !j.ok) {
+      ctx.emit('features', 'running', name + ' error: ' +
+        String((j && j.error) || 'unknown').slice(0, 80));
+      continue;
     }
-  } catch (e) {
-    ctx.emit('features', 'running', 'fleet error: ' + (e as Error).message.slice(0, 80));
+    try {
+      const rows = featureReportToRows(j);
+      inserted += await pipelineStore.createFindings(ctx.job.id, rows);
+      mod  += (j.mod_artifacts       || []).length;
+      anti += (j.anti_tamper_surface || []).length;
+      fw   += (j.framework_markers   || []).length;
+    } catch (e) {
+      ctx.emit('features', 'running', name + ' adapt error: ' +
+        (e as Error).message.slice(0, 80));
+    }
   }
 
-  // ── 2. Rules DB + Drebin (apk_feature_full_v3) ───────────────
-  ctx.emit('features', 'running', 'rules DB + Drebin (~80s)');
-  try {
-    const r = await fetch(BACKEND + '/tool/apk_feature_full_v3', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
-    });
-    const j: any = await r.json();
-    if (j.ok) {
-      const rows = featureReportToRows(j);
-      totalInserted += await pipelineStore.createFindings(ctx.job.id, rows);
-      modCount  += (j.mod_artifacts       || []).length;
-      antiCount += (j.anti_tamper_surface || []).length;
-      fwCount   += (j.framework_markers   || []).length;
-    }
-  } catch (e) {
-    ctx.emit('features', 'running', 'rules-DB error: ' + (e as Error).message.slice(0, 80));
-  }
-
-  return totalInserted + ' findings (' + modCount + ' mod / ' +
-    antiCount + ' anti-tamper / ' + fwCount + ' framework) in ' +
-    (Date.now() - t0) + 'ms';
+  return inserted + ' findings (' + mod + ' mod / ' + anti + ' anti-tamper / ' +
+    fw + ' framework) in ' + (Date.now() - t0) + 'ms';
 }
 
 async function phaseNested(ctx: PhaseContext): Promise<string> {
@@ -431,10 +470,10 @@ async function phaseNested(ctx: PhaseContext): Promise<string> {
   const BACKEND = 'http://127.0.0.1:8792';
   ctx.emit('nested', 'start', 'outer vs inner class delta');
   try {
-    const r = await fetch(BACKEND + '/tool/apk_nested_diff', {
+    const r = await fetchWithRetry(BACKEND + '/tool/apk_nested_diff', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: ctx.job.apkPath, full_class_diff: true }),
-    });
+    }, { label: 'nested' });
     const j: any = await r.json();
     if (!j.ok) return 'nested diff failed: ' + (j.error || 'unknown');
     if (!j.has_nested) return 'no nested APK entries';
@@ -466,10 +505,10 @@ async function phaseStructural(ctx: PhaseContext): Promise<string> {
   const BACKEND = 'http://127.0.0.1:8792';
   ctx.emit('structural', 'start', 'native libs + framework + OBB (~15s)');
   try {
-    const r = await fetch(BACKEND + '/tool/apk_structural', {
+    const r = await fetchWithRetry(BACKEND + '/tool/apk_structural', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: ctx.job.apkPath }),
-    });
+    }, { label: 'structural', healthWaitMs: 90_000 });
     const j: any = await r.json();
     if (!j.ok) return 'structural failed: ' + (j.error || 'unknown');
     const { structuralReportToRows } = await import('./findingAdapters');
@@ -492,10 +531,10 @@ async function phaseAnticheat(ctx: PhaseContext): Promise<string> {
   const BACKEND = 'http://127.0.0.1:8792';
   ctx.emit('anticheat', 'start', 'ACE roster + integrity (~10s)');
   try {
-    const r = await fetch(BACKEND + '/tool/apk_anticheat', {
+    const r = await fetchWithRetry(BACKEND + '/tool/apk_anticheat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: ctx.job.apkPath }),
-    });
+    }, { label: 'anticheat' });
     const j: any = await r.json();
     if (!j.ok) return 'anticheat failed: ' + (j.error || 'unknown');
     const { anticheatReportToRows } = await import('./findingAdapters');
