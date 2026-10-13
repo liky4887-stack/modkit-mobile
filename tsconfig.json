@@ -16,8 +16,6 @@
     "nativewind-env.d.ts"
   ],
   "exclude": [
-    "src/orchestration/antiCheatBypass.ts",
-    "src/orchestration/pipelineRunner.ts",
     "index.js",
     "config/"
   ]

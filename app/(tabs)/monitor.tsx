@@ -164,8 +164,6 @@ export default function MonitorTab() {
     return { byName, currentPhase, currentProgress, pct, remainingMs, elapsedTotal };
   }, [job, phases, units, tickNow]);
 
-  const enhancedApk = plan?.clean_apk || plan?.enhanced_apk || plan?.recombination?.final_apk || null;
-
   if (!job) {
     return (
       <View style={styles.container}>
@@ -326,59 +324,7 @@ export default function MonitorTab() {
           </View>
         )}
 
-        {/* Enhanced APK download */}
-        {enhancedApk && (
-          <Pressable
-            onPress={() => { try { Linking.openURL('file://' + enhancedApk); } catch {} }}
-            style={styles.downloadCard}
-          >
-            <Text style={styles.downloadTitle}>ENHANCED APK READY</Text>
-            <Text style={styles.downloadPath} numberOfLines={2}>{enhancedApk}</Text>
-            {(plan?.clean_size || plan?.final_size) && (
-              <Text style={styles.downloadMeta}>
-                {(((plan.clean_size || plan.final_size) as number) / 1e9).toFixed(2)} GB · tap to open
-              </Text>
-            )}
-            {plan?.orchestration_verdict && (
-              <Text style={styles.downloadMeta}>verdict: {plan.orchestration_verdict}</Text>
-            )}
-          </Pressable>
-        )}
-
-        {/* Audit block when done */}
-        {job.state === 'done' && plan && (
-          <View style={styles.block}>
-            <Text style={styles.blockLabel}>AUDIT</Text>
-            {plan.reverted_count != null && (
-              <Text style={styles.auditLine}>
-                reverted: {plan.reverted_count} item(s)
-                {plan.reverted_dexes?.length ? ' · dexes: ' + plan.reverted_dexes.join(', ') : ''}
-              </Text>
-            )}
-            {plan.integrity && (
-              <>
-                <Text style={styles.auditLine}>
-                  dex count: {plan.integrity.orig_dex_count} → {plan.integrity.new_dex_count}
-                  {plan.integrity.dex_count_preserved ? ' ✓' : ' ✕'}
-                </Text>
-                <Text style={styles.auditLine}>
-                  other files intact: {plan.integrity.non_target_dexes_intact ? 'yes ✓' : 'no ✕'}
-                </Text>
-              </>
-            )}
-            {plan.signature && (
-              <Text style={styles.auditLine}>
-                signature: {plan.signature.ok ? 'verified ✓' : 'failed ✕'}
-              </Text>
-            )}
-            {plan.follow_back && plan.follow_back.length > 0 && (
-              <Text style={styles.auditLine}>
-                follow-back: {plan.follow_back.every((f: any) => f.checks?.every((c: any) => c.postcondition_in_final_apk))
-                  ? 'all patches present ✓' : 'some missing ✕'}
-              </Text>
-            )}
-          </View>
-        )}
+        
       </ScrollView>
     </View>
   );

@@ -493,17 +493,13 @@ export const pipelineStore = {
   },
 
   async getJobPlan(jobId: string): Promise<{
-    enhanced_apk?: string;
-    final_size?: number;
-    orchestration_verdict?: string;
-    integrity?: any;
-    signature?: any;
-    batches?: any[];
-    follow_back?: any[];
-    cross_batch?: any;
-    report_path?: string;
-    total_ms?: number;
-  } | null> {
+      pre_gate_summary?: any;
+      combined_container?: string;
+      inner_apk?: string;
+      inner_obb?: string;
+      inner_apk_size?: number;
+      inner_obb_size?: number;
+    } | null> {
     const db = await getDb();
     const row = await db.getFirstAsync<any>(
       `SELECT plan_json FROM pipeline_jobs WHERE id = ?`, [jobId],
@@ -613,11 +609,9 @@ export const pipelineStore = {
 
 
   async getFullAnswer(id: string): Promise<string> {
-    const db = await getDb();
-    const r = await db.getFirstAsync<{ final_answer: string }>(
-      `SELECT final_answer FROM finding_investigations WHERE id = ?`, [id]
-    );
-    return r?.final_answer ?? '';
+      // finding_investigations was dropped in schema v20.
+      // Kept as a safe no-op.
+      return '';
   },
 
   // ── Agent steps (for the UI step trace) ─────────────────────

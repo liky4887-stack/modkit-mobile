@@ -45,64 +45,13 @@ export interface RunResult {
 
 
 async function syncJobToBackend(jobId: string): Promise<void> {
-  try {
-    const job = await pipelineStore.getJob(jobId);
-    if (!job) return;
-
-    const [phases] = await Promise.all([
-      pipelineStore.getPhases(jobId).catch(() => []),
-      ]);
-
-    let artifacts: any[] = [];
-    try {
-      const { getDb } = await import('@/db/client');
-      const db = await getDb();
-      artifacts = await db.getAllAsync<any>(
-        `SELECT id, phase, title, file_path, size_bytes, sha256, created_at
-           FROM finding_artifacts WHERE job_id = ? ORDER BY created_at DESC LIMIT 200`,
-        [jobId]
-      );
-    } catch {}
-
-    let chats: any[] = [];
-    try {
-      const { getDb } = await import('@/db/client');
-      const db = await getDb();
-      chats = await db.getAllAsync<any>(
-        `SELECT id, phase, unit_id, state, turns, tokens_in, tokens_out,
-                elapsed_ms, started_at, finished_at
-           FROM pipeline_chats WHERE job_id = ?
-           ORDER BY started_at DESC LIMIT 200`,
-        [jobId]
-      );
-    } catch {}
-
-    const payload = {
-      job_id: job.id,
-      state: job.state,
-      apk_name: job.apkName,
-      apk_path: job.apkPath,
-      current_phase: job.currentPhase,
-      ds_calls: job.dsCalls,
-      ds_elapsed_ms: job.dsElapsedMs,
-      started_at: job.startedAt,
-      updated_at: Date.now(),
-      finished_at: job.finishedAt,
-      phases,
-      units: [],
-      investigations: [],
-      artifacts,
-      chats,
-    };
-
-    await guardFetch('http://127.0.0.1:8792/orchestration/sync', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // never fail the pipeline on a sync issue
-  }
+  // Stub — the LLM-era sync target (pipeline_chats,
+  // finding_artifacts, finding_investigations) was dropped in
+  // schema v20. Historically this function queried those tables
+  // and POSTed a snapshot to /orchestration/sync, which the
+  // sidecar now accepts and drops. Kept as a no-op so the
+  // phase-loop call sites don't need to change.
+  return;
 }
 
 async function acquireWakeLock(reason: string): Promise<boolean> {
@@ -833,8 +782,10 @@ export const pipelineRunner = {
         const elapsedMs = Date.now() - t0;
 
         if (summary === '__REVIEW_GATE_PAUSE__') {
-          await pipelineStore.finishPhase(jobId, phase, summary);
-          outcomes.push({ phase, state: 'paused' as any, summary, elapsedMs });
+          // Store human-readable summary — the sentinel is internal.
+          const pauseSummary = 'awaiting user review';
+          await pipelineStore.finishPhase(jobId, phase, pauseSummary);
+          outcomes.push({ phase, state: 'paused' as any, summary: pauseSummary, elapsedMs });
           console.log(`[pipeline] ${phase} paused in ${(elapsedMs/1000).toFixed(1)}s — awaiting user`);
           emit(phase, 'paused', 'awaiting user decisions in MODS tab');
           await pipelineStore.setJobState(jobId, 'awaiting_user' as any);
