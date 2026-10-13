@@ -720,6 +720,18 @@ export const pipelineRunner = {
     // Hold wake lock — prevents Android from suspending Termux mid-run
     await acquireWakeLock('pipeline:' + jobId);
 
+    // Clear the sidecar's .so-cache before every run. Each run extracts
+    // ~200 MB of native libs; without this, runs stack up until the
+    // disk hits 99% and the sidecar dies mid-pipeline (structural needs
+    // to extract the 1.38 GB inner APK).
+    try {
+      await fetch('http://127.0.0.1:8792/tool/cache_clear', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+    } catch { /* best effort — never fail the run on this */ }
+
     const job = await pipelineStore.getJob(jobId);
     if (!job) throw new Error('job not found: ' + jobId);
 
