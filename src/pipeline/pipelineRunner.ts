@@ -769,6 +769,21 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
     lines.push('- [' + f.severity + '] ' + f.title);
   }
   lines.push('');
+  const rp: any = plan as any;
+  if (rp && rp.recombined_apk) {
+    lines.push('## recombined APK');
+    lines.push('');
+    lines.push('- path: `' + rp.recombined_apk + '`');
+    if (rp.recombined_size) lines.push('- size: ' + rp.recombined_size + ' bytes');
+    if (rp.recombined_patches) lines.push('- patches applied: ' + rp.recombined_patches);
+    if (Array.isArray(rp.recombined_targets)) {
+      for (const t of rp.recombined_targets.slice(0, 50)) {
+        lines.push('  - `' + t + '`');
+      }
+    }
+    lines.push('');
+  }
+
   if (plan) {
     lines.push('## plan');
     lines.push('');
