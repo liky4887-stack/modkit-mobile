@@ -365,29 +365,62 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
 }
 
 async function phaseFeatures(ctx: PhaseContext): Promise<string> {
-  // Feature bot fleet — same job, same findings table.
+  // Two independent feature engines, both called, findings merged:
+  //   1. feature_bots_run   10-bot fleet (aimbot/esp/overlay/hooks...)
+  //   2. apk_feature_full   rules DB + Drebin (ESP/aimbot keywords
+  //                         + anti-check disambiguation)
+  //
+  // The fleet covers structural bot logic; the rules DB covers literal
+  // mod strings and anti-tamper classification. Dropping either one
+  // loses coverage — the fleet alone misses the anti_tamper_surface
+  // bucket and the rules-DB keyword scan.
   const BACKEND = 'http://127.0.0.1:8792';
-  ctx.emit('features', 'start', 'running feature bot fleet (~100s)');
+  const { featureReportToRows } = await import('./findingAdapters');
+  let totalInserted = 0;
+  let modCount = 0, antiCount = 0, fwCount = 0;
+  const t0 = Date.now();
+
+  // ── 1. Fleet ─────────────────────────────────────────────────
+  ctx.emit('features', 'start', 'feature bot fleet (~100s)');
   try {
     const r = await fetch(BACKEND + '/tool/feature_bots_run', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: ctx.job.apkPath }),
     });
     const j: any = await r.json();
-    if (!j.ok) return 'feature fleet failed: ' + (j.error || 'unknown');
-    const { featureReportToRows } = await import('./findingAdapters');
-    const rows = featureReportToRows(j);
-    const n = await pipelineStore.createFindings(ctx.job.id, rows);
-    const mod  = (j.mod_artifacts       || []).length;
-    const anti = (j.anti_tamper_surface || []).length;
-    const fw   = (j.framework_markers   || []).length;
-    const rej  = (j.rejected            || []).length;
-    return n + ' findings (' + mod + ' mod / ' + anti + ' anti-tamper / ' +
-      fw + ' framework' + (rej ? ' · ' + rej + ' rejected' : '') +
-      ') in ' + (j.total_ms || 0) + 'ms';
+    if (j.ok) {
+      const rows = featureReportToRows(j);
+      totalInserted += await pipelineStore.createFindings(ctx.job.id, rows);
+      modCount  += (j.mod_artifacts       || []).length;
+      antiCount += (j.anti_tamper_surface || []).length;
+      fwCount   += (j.framework_markers   || []).length;
+    }
   } catch (e) {
-    return 'features error: ' + (e as Error).message.slice(0, 180);
+    ctx.emit('features', 'running', 'fleet error: ' + (e as Error).message.slice(0, 80));
   }
+
+  // ── 2. Rules DB + Drebin (apk_feature_full_v3) ───────────────
+  ctx.emit('features', 'running', 'rules DB + Drebin (~80s)');
+  try {
+    const r = await fetch(BACKEND + '/tool/apk_feature_full_v3', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    });
+    const j: any = await r.json();
+    if (j.ok) {
+      const rows = featureReportToRows(j);
+      totalInserted += await pipelineStore.createFindings(ctx.job.id, rows);
+      modCount  += (j.mod_artifacts       || []).length;
+      antiCount += (j.anti_tamper_surface || []).length;
+      fwCount   += (j.framework_markers   || []).length;
+    }
+  } catch (e) {
+    ctx.emit('features', 'running', 'rules-DB error: ' + (e as Error).message.slice(0, 80));
+  }
+
+  return totalInserted + ' findings (' + modCount + ' mod / ' +
+    antiCount + ' anti-tamper / ' + fwCount + ' framework) in ' +
+    (Date.now() - t0) + 'ms';
 }
 
 async function phaseNested(ctx: PhaseContext): Promise<string> {
@@ -480,10 +513,17 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
 
   for (const f of findings) {
     const src = f.evidenceSource || '';
+    // feature_hunt (rules DB + fleet) sources
     if (src.startsWith('feature_hunt:mod_artifact'))      mod_signals.push(f);
     else if (src.startsWith('feature_hunt:anti_tamper'))  defense_signals.push(f);
     else if (src.startsWith('feature_hunt:framework'))    framework_signals.push(f);
+    // structural (.so density / framework / OBB) sources
+    else if (src.startsWith('structural:mod_artifact'))   mod_signals.push(f);
+    else if (src.startsWith('structural:anti_tamper'))    defense_signals.push(f);
+    else if (src.startsWith('structural:framework'))      framework_signals.push(f);
+    // nested (outer vs inner) source
     else if (src.startsWith('nested'))                    nested_signals.push(f);
+    // everything else is bot roster / SDK observation
     else                                                   sdk_findings_count++;
   }
 
