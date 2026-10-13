@@ -485,6 +485,31 @@ async function phaseStructural(ctx: PhaseContext): Promise<string> {
   }
 }
 
+async function phaseAnticheat(ctx: PhaseContext): Promise<string> {
+  // ACE roster + integrity check. Reports which anti-cheat libraries
+  // the target ships and whether any of them were modified between
+  // the outer APK and the inner base.apk.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('anticheat', 'start', 'ACE roster + integrity (~10s)');
+  try {
+    const r = await fetch(BACKEND + '/tool/apk_anticheat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'anticheat failed: ' + (j.error || 'unknown');
+    const { anticheatReportToRows } = await import('./findingAdapters');
+    const rows = anticheatReportToRows(j);
+    const n = await pipelineStore.createFindings(ctx.job.id, rows);
+    const mod  = (j.mod_artifacts       || []).length;
+    const anti = (j.anti_tamper_surface || []).length;
+    return n + ' findings (' + mod + ' mod / ' + anti + ' ace) in ' +
+      (j.wall_ms || 0) + 'ms';
+  } catch (e) {
+    return 'anticheat error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   // Review gate — the pause point where the user sees the analysis
   // result and decides whether to proceed. In single-APK mode this is
@@ -521,6 +546,10 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
     else if (src.startsWith('structural:mod_artifact'))   mod_signals.push(f);
     else if (src.startsWith('structural:anti_tamper'))    defense_signals.push(f);
     else if (src.startsWith('structural:framework'))      framework_signals.push(f);
+    // anticheat (ACE roster + integrity) sources
+    else if (src.startsWith('anticheat:mod_artifact'))    mod_signals.push(f);
+    else if (src.startsWith('anticheat:anti_tamper'))     defense_signals.push(f);
+    else if (src.startsWith('anticheat:framework'))       framework_signals.push(f);
     // nested (outer vs inner) source
     else if (src.startsWith('nested'))                    nested_signals.push(f);
     // everything else is bot roster / SDK observation
@@ -744,6 +773,7 @@ export const pipelineRunner = {
         else if (phase === 'features')    summary = await phaseFeatures(ctx);
         else if (phase === 'nested')      summary = await phaseNested(ctx);
         else if (phase === 'structural')  summary = await phaseStructural(ctx);
+        else if (phase === 'anticheat')   summary = await phaseAnticheat(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);

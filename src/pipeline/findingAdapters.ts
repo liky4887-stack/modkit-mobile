@@ -190,3 +190,44 @@ export function structuralReportToRows(report: any): NewFinding[] {
   }
   return rows;
 }
+
+// ── Anti-cheat integrity → findings ───────────────────────────────
+// Two kinds of rows: per-library details (roster match) and
+// aggregate summaries (anti-cheat present / intact / modified).
+// Both arrive bucketed by finding_class already, we just normalize
+// to NewFinding row shape.
+export function anticheatReportToRows(report: any): NewFinding[] {
+  const rows: NewFinding[] = [];
+  const all: any[] = [
+    ...(report.mod_artifacts       || []),
+    ...(report.anti_tamper_surface || []),
+    ...(report.framework_markers   || []),
+  ];
+
+  for (const f of all) {
+    const cls = f.finding_class || 'anti_tamper_surface';
+    const conf = typeof f.confidence === 'number' ? f.confidence : 0.8;
+    const ev = (f.evidence || [])
+      .slice(0, 4)
+      .map((e: any) => `${e.pattern || '?'} → ${(e.matched || '').slice(0, 80)}`)
+      .join(' · ');
+    rows.push({
+      unitId: null,
+      severity: f.severity || (cls !== 'mod_artifact' ? 'info'
+                : conf >= 0.9 ? 'critical'
+                : conf >= 0.7 ? 'high'
+                : 'medium'),
+      category: f.category || 'anticheat',
+      title: f.feature_name || f.feature_id || 'anticheat',
+      risk: f.risk || '',
+      evidenceClass: f.feature_id || null,
+      evidenceMethod: ev || null,
+      evidenceSource: `anticheat:${cls}:${f.lib || f.vendor || 'ace'}`,
+      patch: {},
+      verification: null,
+      confidence: conf,
+      confidenceBand: conf >= 0.9 ? 'high' : conf >= 0.7 ? 'medium' : 'low',
+    });
+  }
+  return rows;
+}
