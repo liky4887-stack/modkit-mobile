@@ -108,6 +108,7 @@ export const PHASES_ORDER = [
   'bots',         // 18-bot detector roster
   'features',     // feature-hunt scan + fingerprint (Drebin + rules DB)
   'nested',       // nested APK analysis — outer vs inner class delta
+  'structural',   // native .so + framework + OBB structural analysis
   'review_gate',  // pause — show analysis result, user proceeds
   'export',       // markdown report
   'audit',        // counts

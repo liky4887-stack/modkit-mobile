@@ -426,6 +426,32 @@ async function phaseNested(ctx: PhaseContext): Promise<string> {
   }
 }
 
+async function phaseStructural(ctx: PhaseContext): Promise<string> {
+  // Native .so analysis + framework ID + OBB recon + outer/inner lib
+  // diff — one call. Findings land with the same bucket shape the
+  // review gate reads (mod_artifact / framework_marker).
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('structural', 'start', 'native libs + framework + OBB (~15s)');
+  try {
+    const r = await fetch(BACKEND + '/tool/apk_structural', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+    });
+    const j: any = await r.json();
+    if (!j.ok) return 'structural failed: ' + (j.error || 'unknown');
+    const { structuralReportToRows } = await import('./findingAdapters');
+    const rows = structuralReportToRows(j);
+    const n = await pipelineStore.createFindings(ctx.job.id, rows);
+    const mod = (j.mod_artifacts       || []).length;
+    const fw  = (j.framework_markers   || []).length;
+    const oo  = (j.outer_only_libs     || []).length;
+    return n + ' findings (' + mod + ' mod / ' + fw + ' framework · ' +
+      oo + ' outer-only libs) in ' + (j.wall_ms || 0) + 'ms';
+  } catch (e) {
+    return 'structural error: ' + (e as Error).message.slice(0, 180);
+  }
+}
+
 async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   // Review gate — the pause point where the user sees the analysis
   // result and decides whether to proceed. In single-APK mode this is
@@ -677,6 +703,7 @@ export const pipelineRunner = {
         else if (phase === 'bots')        summary = await phaseBots(ctx);
         else if (phase === 'features')    summary = await phaseFeatures(ctx);
         else if (phase === 'nested')      summary = await phaseNested(ctx);
+        else if (phase === 'structural')  summary = await phaseStructural(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);

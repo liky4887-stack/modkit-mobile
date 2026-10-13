@@ -148,3 +148,45 @@ export function nestedDiffToRows(report: any): NewFinding[] {
     confidenceBand: f.confidence_band ?? 'medium',
   }));
 }
+
+// ── Structural .so analysis → findings ────────────────────────────
+// The structural tool buckets findings by class already
+// (mod_artifacts / anti_tamper_surface / framework_markers). Each
+// carries feature_id, feature_name, confidence, evidence[] and a
+// lib field naming the .so it came from.
+export function structuralReportToRows(report: any): NewFinding[] {
+  const rows: NewFinding[] = [];
+  const all: any[] = [
+    ...(report.mod_artifacts       || []),
+    ...(report.anti_tamper_surface || []),
+    ...(report.framework_markers   || []),
+  ];
+
+  for (const f of all) {
+    const cls = f.finding_class || 'framework_marker';
+    const conf = typeof f.confidence === 'number' ? f.confidence : 0.5;
+    const ev = (f.evidence || [])
+      .slice(0, 4)
+      .map((e: any) => `${e.pattern || '?'} → ${(e.matched || '').slice(0, 80)}`)
+      .join(' · ');
+    rows.push({
+      unitId: null,
+      severity: f.severity || (cls !== 'mod_artifact' ? 'info'
+                : conf >= 0.9 ? 'critical'
+                : conf >= 0.7 ? 'high'
+                : conf >= 0.5 ? 'medium'
+                : conf >= 0.3 ? 'low' : 'info'),
+      category: f.category || 'structural',
+      title: f.feature_name || f.feature_id || 'structural',
+      risk: f.risk || '',
+      evidenceClass: f.feature_id || null,
+      evidenceMethod: ev || null,
+      evidenceSource: `structural:${cls}:${f.lib || 'apk'}`,
+      patch: {},
+      verification: null,
+      confidence: conf,
+      confidenceBand: conf >= 0.9 ? 'high' : conf >= 0.7 ? 'medium' : 'low',
+    });
+  }
+  return rows;
+}
