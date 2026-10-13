@@ -110,6 +110,7 @@ export const PHASES_ORDER = [
   'anticheat',    // ACE roster + integrity
   'gates',        // license + login scan + patchable extraction
   'review_gate',  // pause — show everything, user decides
+  'recombine',    // apply selected patches, build signed APK
   'export',       // markdown report
   'audit',        // counts
 ] as const;

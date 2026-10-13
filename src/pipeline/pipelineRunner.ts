@@ -666,6 +666,58 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   return 'review complete — ' + reverted + ' mod(s) marked';
 }
 
+async function phaseRecombine(ctx: PhaseContext): Promise<string> {
+  // Reads the user's decision from plan.gates.selected_targets,
+  // runs apk_license_bypass with those targets, writes the signed
+  // APK. Stores the output path in plan.recombined_apk so export
+  // and audit can reference it.
+  const BACKEND = 'http://127.0.0.1:8792';
+  ctx.emit('recombine', 'start', 'applying selected patches');
+
+  const plan: any = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+  const gates: any = plan.gates || {};
+  const selected: any[] = Array.isArray(gates.selected_targets)
+    ? gates.selected_targets : [];
+
+  if (selected.length === 0) {
+    return 'no patches selected — skipped';
+  }
+
+  const out = ctx.job.apkPath.replace(/\.apk$/i, '') + '-bypassed.apk';
+
+  const r = await fetchWithRetry(BACKEND + '/tool/apk_license_bypass', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      apk_path: ctx.job.apkPath,
+      output_path: out,
+      targets: selected,
+    }),
+  }, { label: 'recombine', healthWaitMs: 120_000 })
+    .then(x => x.json());
+
+  if (!r.ok) {
+    throw new Error('recombine failed: ' + (r.error || 'unknown'));
+  }
+
+  // Persist the output so export can reference it.
+  const nextPlan = {
+    ...plan,
+    recombined_apk: r.final_apk || out,
+    recombined_size: r.final_size,
+    recombined_patches: selected.length,
+    recombined_targets: selected.map((t: any) =>
+      (t.class || '?') + (t.method ? '#' + t.method : '')),
+  };
+  await pipelineStore.setJobJson(ctx.job.id, 'plan', nextPlan);
+
+  return (
+    selected.length + ' patches → ' +
+    (r.final_apk || out).split('/').pop() +
+    ' (' + Math.round((r.final_size || 0) / 1024) + ' KB)'
+  );
+}
+
 async function phaseExport(ctx: PhaseContext): Promise<string> {
   ctx.emit('export', 'start', 'writing report');
 
@@ -839,6 +891,7 @@ export const pipelineRunner = {
         else if (phase === 'anticheat')   summary = await phaseAnticheat(ctx);
         else if (phase === 'gates')       summary = await phaseGates(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
+        else if (phase === 'recombine')   summary = await phaseRecombine(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);
         else                              summary = 'unknown phase: ' + phase;

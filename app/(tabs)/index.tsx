@@ -181,27 +181,33 @@ export default function WorkflowTab() {
       return;
     }
     setBusy('apply');
-    setStatus('building signed APK (' + targets.length + ' patches)…');
+    setStatus('saving decision…');
     try {
-      const out = currentJob.apkPath.replace(/\.apk$/i, '') + '-bypassed.apk';
-      const r = await fetch(BACKEND + '/tool/apk_license_bypass', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          apk_path: currentJob.apkPath,
-          output_path: out,
-          targets,
-        }),
-      }).then(x => x.json());
-      if (!r.ok) throw new Error(r.error || 'apply failed');
-      setOutputPath(r.final_apk || out);
-      await pipelineStore.setReviewState(currentJob.id, 'decided');
-      setStatus('patched → running export…');
-      const pr = await pipelineRunner.run(currentJob.id, {
-        fromPhase: 'export' as any,
+      // 1. Persist the selection into plan.gates.selected_targets
+      const plan: any = (await pipelineStore.getJobPlan(currentJob.id)) || {};
+      const gates = plan.gates || {};
+      await pipelineStore.setJobJson(currentJob.id, 'plan', {
+        ...plan,
+        gates: { ...gates, selected_targets: targets },
       });
-      setStatus('done · ' + targets.length + ' patches · ' + pr.finalState);
+      await pipelineStore.setReviewState(currentJob.id, 'decided');
+
+      // 2. Resume the pipeline from recombine. The runner does the
+      //    actual APK build, then continues through export + audit.
+      setStatus('recombining ' + targets.length + ' patches…');
+      const pr = await pipelineRunner.run(currentJob.id, {
+        fromPhase: 'recombine' as any,
+      });
+      setStatus('done · ' + pr.finalState);
       await loadJob(currentJob.id);
+
+      // 3. Read back the output path for display
+      try {
+        const donePlan: any = await pipelineStore.getJobPlan(currentJob.id);
+        if (donePlan && donePlan.recombined_apk) {
+          setOutputPath(donePlan.recombined_apk);
+        }
+      } catch {}
     } catch (e) {
       setStatus('FAIL · ' +
         (e instanceof Error ? e.message : String(e)).slice(0, 200));
@@ -214,9 +220,18 @@ export default function WorkflowTab() {
     setBusy('export');
     setStatus('exporting report…');
     try {
+      // For EXPORT-ONLY: clear the selection and resume from recombine.
+      // The recombine phase detects an empty target list and skips
+      // itself, so export runs on the original APK.
+      const plan: any = (await pipelineStore.getJobPlan(currentJob.id)) || {};
+      const gates = plan.gates || {};
+      await pipelineStore.setJobJson(currentJob.id, 'plan', {
+        ...plan,
+        gates: { ...gates, selected_targets: [] },
+      });
       await pipelineStore.setReviewState(currentJob.id, 'decided');
       const r = await pipelineRunner.run(currentJob.id, {
-        fromPhase: 'export' as any,
+        fromPhase: 'recombine' as any,
       });
       setStatus('done · ' + r.finalState);
       await loadJob(currentJob.id);
