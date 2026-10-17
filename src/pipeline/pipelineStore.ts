@@ -103,7 +103,7 @@ export interface UnitRecord {
 export const PHASES_ORDER = [
   'import', 'decombine', 'bots', 'features', 'nested', 'structural', 'anticheat', 'gates',
   'review_gate', 'orchestrator_patch', 'kernel_stealth', 'integrity_mazoku', 
-  'anticheat_patch', 'stealth_inject', 'humanize_behavior', 'recombine', 'export', 'audit',
+  'anticheat_patch', 'stealth_inject', 'humanize_behavior', 'heartbeat_simulation', 'report_interceptor', 'update_spoofing', 'recombine', 'export', 'audit',
 ] as const;
 
 // Legacy LLM-driven phases remain available as an opt-in deep-dive chain

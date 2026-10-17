@@ -815,6 +815,45 @@ async function phaseKernelStealth(ctx: PhaseContext): Promise<string> {
   return `Injected ${r.injected_lib}`;
 }
 
+
+async function phaseHeartbeatSimulation(ctx: PhaseContext): Promise<string> {
+  ctx.emit('heartbeat_simulation', 'start', 'Simulating ACE heartbeat');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/heartbeat_simulation', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'heartbeat_simulation' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'heartbeat simulation failed');
+  ctx.job.apkPath = r.out_path;
+  return `Injected ${r.injected_lib} · chained`;
+}
+
+
+async function phaseReportInterceptor(ctx: PhaseContext): Promise<string> {
+  ctx.emit('report_interceptor', 'start', 'Blocking ACE report packets');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/report_interceptor', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'report_interceptor' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'report interceptor failed');
+  ctx.job.apkPath = r.out_path;
+  return `Injected ${r.injected_lib} · chained`;
+}
+
+
+async function phaseUpdateSpoofing(ctx: PhaseContext): Promise<string> {
+  ctx.emit('update_spoofing', 'start', 'Spoofing version check');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/update_spoofing', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'update_spoofing' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'update spoofing failed');
+  ctx.job.apkPath = r.out_path;
+  return `Injected ${r.injected_lib} · chained`;
+}
+
 async function phaseRecombine(ctx: PhaseContext): Promise<string> {
   // Reads the user's decision from plan.gates.selected_targets,
   // runs apk_license_bypass with those targets, writes the signed
@@ -840,7 +879,10 @@ async function phaseRecombine(ctx: PhaseContext): Promise<string> {
     || ctx.job.apkPath.includes('/.mazoku-work/')
     || ctx.job.apkPath.includes('/.stealth-work/')
     || ctx.job.apkPath.includes('/.humanize-work/')
-    || ctx.job.apkPath.includes('/.ace-work/');
+    || ctx.job.apkPath.includes('/.ace-work/')
+    || ctx.job.apkPath.includes('/.heartbeat-work/')
+    || ctx.job.apkPath.includes('/.report-work/')
+    || ctx.job.apkPath.includes('/.update-work/');
   const out = _isTemp
     ? '/storage/emulated/0/Download/' +
       (ctx.job.apkName || 'target').replace(/\.apk$/i, '') + '-bypassed.apk'
@@ -1113,6 +1155,9 @@ export const pipelineRunner = {
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
         else if (phase === 'orchestrator_patch') summary = await phaseOrchestratorPatch(ctx);
         else if (phase === 'humanize_behavior') summary = await phaseHumanizeBehavior(ctx);
+        else if (phase === 'heartbeat_simulation') summary = await phaseHeartbeatSimulation(ctx);
+        else if (phase === 'report_interceptor') summary = await phaseReportInterceptor(ctx);
+        else if (phase === 'update_spoofing') summary = await phaseUpdateSpoofing(ctx);
         else if (phase === 'integrity_mazoku') summary = await phaseIntegrityMazoku(ctx);
         else if (phase === 'kernel_stealth')     summary = await phaseKernelStealth(ctx);
         else if (phase === 'anticheat_patch') summary = await phaseAnticheatPatch(ctx);
