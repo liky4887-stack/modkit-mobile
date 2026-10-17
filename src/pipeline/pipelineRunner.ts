@@ -384,10 +384,10 @@ async function phaseBots(ctx: PhaseContext): Promise<string> {
   const BACKEND = 'http://127.0.0.1:8792';
   ctx.emit('bots', 'start', 'running detector roster');
   try {
-    const r = await fetch(BACKEND + '/tool/bots_run_manager', {
+    const r = await fetchWithRetry(BACKEND + '/tool/bots_run_manager', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apk_path: ctx.job.apkPath }),
-    });
+    }, { label: 'bots' });
     const j: any = await r.json();
     if (!j.ok) return 'bots failed: ' + (j.error || 'unknown');
     const { botFindingsToRows } = await import('./findingAdapters');
@@ -504,8 +504,11 @@ async function phaseStructural(ctx: PhaseContext): Promise<string> {
     }, { label: 'structural', healthWaitMs: 90_000 });
     const j: any = await r.json();
     if (!j.ok) return 'structural failed: ' + (j.error || 'unknown');
-    const { structuralReportToRows } = await import('./findingAdapters');
-    const rows = structuralReportToRows(j);
+    const { structuralReportToRows, capabilitiesToRows } = await import('./findingAdapters');
+    const rows = [
+      ...structuralReportToRows(j),
+      ...capabilitiesToRows(j),
+    ];
     const n = await pipelineStore.createFindings(ctx.job.id, rows);
     const mod = (j.mod_artifacts       || []).length;
     const fw  = (j.framework_markers   || []).length;
@@ -710,6 +713,108 @@ async function phaseReviewGate(ctx: PhaseContext): Promise<string> {
   return 'review complete — ' + reverted + ' mod(s) marked';
 }
 
+
+async function phaseAnticheatPatch(ctx: PhaseContext): Promise<string> {
+  ctx.emit('anticheat_patch', 'start', 'Patching ACE detection vectors');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/anticheat_patch', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'anticheat_patch' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'anticheat patch failed');
+  ctx.job.apkPath = r.out_path; // Chain APK
+  return `${r.patched_libs?.length || 0} ACE libs patched (${r.total_patches || 0} dynamic offsets) → chained`;
+}
+
+async function phaseStealthInject(ctx: PhaseContext): Promise<string> {
+  ctx.emit('stealth_inject', 'start', 'Applying Trusted Overlay & hiding Frida');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/stealth_inject', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'stealth_inject' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'stealth inject failed');
+  ctx.job.apkPath = r.out_path; // Chain APK
+  return `Frida → ${r.new_lib} · chained`;
+}
+
+async function phaseHumanizeBehavior(ctx: PhaseContext): Promise<string> {
+  ctx.emit('humanize_behavior', 'start', 'Generating human-like aimbot profile');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/humanize_behavior', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'humanize_behavior' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'humanize failed');
+  ctx.job.apkPath = r.out_path; // Chain APK
+  return `Profile injected (smooth=${r.smoothing}) → chained`;
+}
+
+
+async function phaseIntegrityMazoku(ctx: PhaseContext): Promise<string> {
+  ctx.emit('integrity_mazoku', 'start', 'Redirecting ACE file reads to clean copies');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/integrity_mazoku', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'integrity_mazoku' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'integrity bypass failed');
+  ctx.job.apkPath = r.out_path;
+  return `Clean backup served for ${r.backed_up || 'libanogs.so'} · chained`;
+}
+
+
+async function phaseOrchestratorPatch(ctx: PhaseContext): Promise<string> {
+  ctx.emit('orchestrator_patch', 'start', 'Applying deep patches (orchestrator)');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const plan: any = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
+  const gates: any = plan.gates || {};
+  const selected: any[] = Array.isArray(gates.selected_targets) ? gates.selected_targets : [];
+  
+  if (selected.length === 0) return 'no patches selected — skipped';
+
+  // Filter out launcher_redirect — recombine handles that
+  const dexPatches = selected.filter((t: any) => t.type !== 'launcher_redirect');
+  if (dexPatches.length === 0) return 'no dex patches selected — skipped';
+
+  const findings = dexPatches.map((t: any, i: number) => ({
+    id: `orch_${i}`,
+    dex: t.dex || 'classes.dex',
+    patch: {
+      type: t.type || 'force_return',
+      target_class: t.class,
+      target_method: t.method,
+      return_value: t.force_value ?? true,
+      dest_class: t.dest_class
+    }
+  }));
+
+  const out = ctx.job.apkPath.replace(/\.apk$/i, '') + '-orchestrated.apk';
+  
+  const r = await fetchWithRetry(BACKEND + '/tool/apk_orchestrated_apply', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath, output_path: out, findings: findings }),
+  }, { label: 'orchestrator_patch', healthWaitMs: 120_000 }).then(x => x.json());
+
+  if (!r.ok) throw new Error('orchestrator failed: ' + (r.error || 'unknown'));
+  
+  ctx.job.apkPath = r.recombination?.final_apk || out;
+  return `${dexPatches.length} deep patches verified via follow-back → chained`;
+}
+
+async function phaseKernelStealth(ctx: PhaseContext): Promise<string> {
+  ctx.emit('kernel_stealth', 'start', 'Hiding SELinux audit logs');
+  const BACKEND = 'http://127.0.0.1:8792';
+  const r = await fetchWithRetry(BACKEND + '/tool/kernel_stealth', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apk_path: ctx.job.apkPath }),
+  }, { label: 'kernel_stealth' }).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || 'audit patch failed');
+  ctx.job.apkPath = r.out_path;
+  return `Injected ${r.injected_lib}`;
+}
+
 async function phaseRecombine(ctx: PhaseContext): Promise<string> {
   // Reads the user's decision from plan.gates.selected_targets,
   // runs apk_license_bypass with those targets, writes the signed
@@ -720,14 +825,26 @@ async function phaseRecombine(ctx: PhaseContext): Promise<string> {
 
   const plan: any = (await pipelineStore.getJobPlan(ctx.job.id)) || {};
   const gates: any = plan.gates || {};
+  // Only handle launcher_redirect here — orchestrator_patch handled the dex
   const selected: any[] = Array.isArray(gates.selected_targets)
-    ? gates.selected_targets : [];
+    ? gates.selected_targets.filter((t: any) => t.type === 'launcher_redirect') : [];
 
   if (selected.length === 0) {
-    return 'no patches selected — skipped';
+    return 'no login redirect selected — skipped';
   }
 
-  const out = ctx.job.apkPath.replace(/\.apk$/i, '') + '-bypassed.apk';
+  const _isTemp = ctx.job.apkPath.includes('/.combined-work/')
+    || ctx.job.apkPath.includes('/.surgery-work/')
+    || ctx.job.apkPath.includes('/.apk-work/')
+    || ctx.job.apkPath.includes('/.kernel-work/')
+    || ctx.job.apkPath.includes('/.mazoku-work/')
+    || ctx.job.apkPath.includes('/.stealth-work/')
+    || ctx.job.apkPath.includes('/.humanize-work/')
+    || ctx.job.apkPath.includes('/.ace-work/');
+  const out = _isTemp
+    ? '/storage/emulated/0/Download/' +
+      (ctx.job.apkName || 'target').replace(/\.apk$/i, '') + '-bypassed.apk'
+    : ctx.job.apkPath.replace(/\.apk$/i, '') + '-bypassed.apk';
 
   const r = await fetchWithRetry(BACKEND + '/tool/apk_license_bypass', {
     method: 'POST',
@@ -837,12 +954,33 @@ async function phaseExport(ctx: PhaseContext): Promise<string> {
   }
 
   const body = lines.join('\n');
-  const r = await fetch('http://127.0.0.1:8792/file/write', {
+  const r = await fetchWithRetry('http://127.0.0.1:8792/file/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path, content: body }),
-  }).then(x => x.json());
+  }, { label: 'export' }).then(x => x.json());
   if (!r.ok) throw new Error('report write failed: ' + (r.error || 'unknown'));
+
+  // Auto-install the built APK over ADB
+  try {
+    const plan = await pipelineStore.getJobPlan(ctx.job.id);
+    const finalApk = (plan as any)?.recombined_apk;
+    if (finalApk) {
+      ctx.emit('export', 'running', 'Auto-installing via ADB...');
+      const adbRes = await fetch('http://127.0.0.1:8792/tool/adb_install', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apk_path: finalApk }),
+      }).then(x => x.json());
+      if (adbRes.ok) {
+         console.log('[pipeline] ADB Install Success:', adbRes.output);
+      } else {
+         console.warn('[pipeline] ADB Install Failed:', adbRes.error);
+      }
+    }
+  } catch (e) {
+    console.warn('[pipeline] ADB install failed:', e);
+  }
 
   const bytes = body.length;
   return 'report → ' + path + ' (' + bytes + ' bytes, ' +
@@ -880,7 +1018,18 @@ export const pipelineRunner = {
     const outcomes: PhaseOutcome[] = [];
 
     // Hold wake lock — prevents Android from suspending Termux mid-run
-    await acquireWakeLock('pipeline:' + jobId);
+    const _wakeOk = await acquireWakeLock('pipeline:' + jobId);
+    if (!_wakeOk) {
+      console.warn('[pipeline] wake lock NOT acquired — Android may suspend mid-run');
+      try {
+        eventBus.emit({
+          scanId: jobId, correlationId: jobId, phase: 'import' as any,
+          functionId: 'orchestration_logs',
+          severity: 'warn',
+          payload: { action: 'wake_lock_failed' },
+        });
+      } catch {}
+    }
 
     // Clear the sidecar's .so-cache before every run. Each run extracts
     // ~200 MB of native libs; without this, runs stack up until the
@@ -896,6 +1045,12 @@ export const pipelineRunner = {
 
     const job = await pipelineStore.getJob(jobId);
     if (!job) throw new Error('job not found: ' + jobId);
+
+    // Idempotent phase row creation — safe if caller already did it.
+    const _existingPhases = await pipelineStore.getPhases(jobId);
+    if (_existingPhases.length === 0) {
+      await pipelineStore.createPhasesForJob(jobId);
+    }
 
     const emit = (phase: PhaseId, state: string, summary?: string) => {
       eventBus.emit({
@@ -956,6 +1111,13 @@ export const pipelineRunner = {
         else if (phase === 'anticheat')   summary = await phaseAnticheat(ctx);
         else if (phase === 'gates')       summary = await phaseGates(ctx);
         else if (phase === 'review_gate') summary = await phaseReviewGate(ctx);
+        else if (phase === 'orchestrator_patch') summary = await phaseOrchestratorPatch(ctx);
+        else if (phase === 'humanize_behavior') summary = await phaseHumanizeBehavior(ctx);
+        else if (phase === 'integrity_mazoku') summary = await phaseIntegrityMazoku(ctx);
+        else if (phase === 'kernel_stealth')     summary = await phaseKernelStealth(ctx);
+        else if (phase === 'anticheat_patch') summary = await phaseAnticheatPatch(ctx);
+        else if (phase === 'stealth_inject')  summary = await phaseStealthInject(ctx);
+        
         else if (phase === 'recombine')   summary = await phaseRecombine(ctx);
         else if (phase === 'export')      summary = await phaseExport(ctx);
         else if (phase === 'audit')       summary = await phaseAudit(ctx);

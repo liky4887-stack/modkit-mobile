@@ -101,19 +101,9 @@ export interface UnitRecord {
 }
 
 export const PHASES_ORDER = [
-  // Single-APK analysis chain. No reference APK, no diff, no revert.
-  'import',       // file stat + load target into sidecar
-  'decombine',    // probe for APK+OBB combined container; unpack + reload
-  'bots',         // 18-bot detector roster
-  'features',     // feature-hunt scan + fingerprint
-  'nested',       // nested APK analysis
-  'structural',   // native .so + capabilities
-  'anticheat',    // ACE roster + integrity
-  'gates',        // license + login scan + patchable extraction
-  'review_gate',  // pause — show everything, user decides
-  'recombine',    // apply selected patches, build signed APK
-  'export',       // markdown report
-  'audit',        // counts
+  'import', 'decombine', 'bots', 'features', 'nested', 'structural', 'anticheat', 'gates',
+  'review_gate', 'orchestrator_patch', 'kernel_stealth', 'integrity_mazoku', 
+  'anticheat_patch', 'stealth_inject', 'humanize_behavior', 'recombine', 'export', 'audit',
 ] as const;
 
 // Legacy LLM-driven phases remain available as an opt-in deep-dive chain
